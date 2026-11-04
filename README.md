@@ -45,7 +45,7 @@ añadid un servidor TURN gratuito (por ejemplo, el free tier de Cloudflare TURN)
 
 ## Publicar (gratis)
 
-**GitHub Pages:** en *Settings → Pages → Source*, elige **GitHub Actions**. Cada push a `main` se publica solo
+**GitHub Pages:** en *Settings → Pages → Source*, elige **GitHub Actions**. Cada push a la rama por defecto del repo se publica solo
 (`.github/workflows/deploy.yml`).
 
 **Cloudflare Pages** (alternativa): build command `npm run build`, output `dist`.
