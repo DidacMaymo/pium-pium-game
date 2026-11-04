@@ -11,40 +11,88 @@
 
   <div id="hud">
     <div id="score"></div>
+    <div id="feed"></div>
     <div id="crosshair"></div>
     <div id="hitmarker">✕</div>
+    <div id="toasts"></div>
     <div id="msg"><div id="msg-main"></div><div id="msg-sub"></div></div>
+    <div id="pu-bar"></div>
     <div id="dead"><div>TE HAN FRITO</div><div id="dead-count">3</div></div>
-    <div id="click">Haz clic para jugar</div>
-    <div id="help">WASD moverse · Ratón apuntar · Clic disparar · Esc soltar ratón</div>
+    <div id="help">WASD moverse · Espacio saltar · Clic disparar · Esc pausa</div>
+  </div>
+
+  <div id="pause" hidden>
+    <div class="pause-box">
+      <p>Haz clic para jugar</p>
+      <button id="btn-settings-pause" class="ghost">⚙ Ajustes</button>
+      <button id="btn-quit" class="ghost">Salir al menú</button>
+    </div>
   </div>
 
   <div id="overlay">
     <div class="panel">
       <h1>PIUM PIUM<br /><span>LABERINTO</span></h1>
-      <p class="tag">1v1 · encuentra la salida · si te matan reapareces en cualquier sitio</p>
 
       <div id="lobby">
+        <input id="input-name" maxlength="14" placeholder="Tu nombre" autocomplete="off" class="name" />
+
+        <div class="modes">
+          <label><input type="radio" name="mode" value="maze" checked /><span><b>Laberinto</b><small>Encuentra la salida</small></span></label>
+          <label><input type="radio" name="mode" value="arena" /><span><b>Arena</b><small>Todos contra todos</small></span></label>
+        </div>
+        <div class="row opt" id="opt-diff">
+          <span>Dificultad</span>
+          <select id="sel-diff">
+            <option value="facil">Fácil (pequeño)</option>
+            <option value="media" selected>Media</option>
+            <option value="dificil">Difícil (enorme)</option>
+          </select>
+        </div>
+        <div class="row opt" id="opt-goal" hidden>
+          <span>Bajas para ganar</span>
+          <select id="sel-goal">
+            <option value="5">5</option>
+            <option value="10" selected>10</option>
+            <option value="20">20</option>
+          </select>
+        </div>
+
         <button id="btn-create">Crear sala</button>
         <div class="row">
-          <input id="input-code" maxlength="8" placeholder="CÓDIGO" autocomplete="off" />
+          <input id="input-code" maxlength="8" placeholder="CÓDIGO" autocomplete="off" class="code-in" />
           <button id="btn-join">Unirse</button>
         </div>
-        <button id="btn-solo" class="ghost">Practicar solo</button>
+        <div class="row">
+          <button id="btn-solo" class="ghost">Practicar solo</button>
+          <button id="btn-settings" class="ghost">⚙ Ajustes</button>
+        </div>
       </div>
 
       <div id="waiting" hidden>
-        <p id="wait-title">Esperando rival…</p>
+        <p id="wait-title">Esperando jugadores…</p>
         <div id="share" hidden>
           <p class="code" id="room-code"></p>
           <div class="row">
             <input id="room-link" readonly />
             <button id="btn-copy">Copiar</button>
           </div>
-          <p class="small">Mándale el enlace. Conectar puede tardar 5–20 s.</p>
+          <p class="small">Mándales el enlace. Conectar puede tardar 5–20 s. Pueden entrar a mitad de partida.</p>
         </div>
+        <p id="wait-players" class="small"></p>
+        <button id="btn-start" hidden>¡Empezar!</button>
         <button id="btn-cancel" class="ghost">Cancelar</button>
       </div>
+    </div>
+  </div>
+
+  <div id="settings" hidden>
+    <div class="panel settings-panel">
+      <h2>Ajustes</h2>
+      <label>Sensibilidad <em id="val-sens"></em><input id="set-sens" type="range" min="0.2" max="3" step="0.05" /></label>
+      <label>Campo de visión <em id="val-fov"></em><input id="set-fov" type="range" min="60" max="110" step="1" /></label>
+      <label>Música <em id="val-music"></em><input id="set-music" type="range" min="0" max="1" step="0.05" /></label>
+      <label>Efectos <em id="val-sfx"></em><input id="set-sfx" type="range" min="0" max="1" step="0.05" /></label>
+      <button id="btn-settings-close">Listo</button>
     </div>
   </div>
 
