@@ -1,0 +1,29 @@
+{
+  "name": "pium-pium-laberinto",
+  "version": "1.0.0",
+  "description": "Shooter láser 1v1 en un laberinto, multijugador P2P sin servidor",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DidacMaymo/stupid-game.git"
+  },
+  "author": "",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/DidacMaymo/stupid-game/issues"
+  },
+  "homepage": "https://github.com/DidacMaymo/stupid-game#readme",
+  "dependencies": {
+    "three": "^0.187.0",
+    "trystero": "^0.26.0"
+  },
+  "devDependencies": {
+    "vite": "^8.3.5"
+  },
+  "private": true,
+  "type": "module"
+}

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pium Pium Laberinto</title>
+  <link rel="stylesheet" href="./src/style.css" />
+</head>
+<body>
+  <div id="app"></div>
+
+  <div id="hud">
+    <div id="score"></div>
+    <div id="crosshair"></div>
+    <div id="hitmarker">✕</div>
+    <div id="msg"><div id="msg-main"></div><div id="msg-sub"></div></div>
+    <div id="dead"><div>TE HAN FRITO</div><div id="dead-count">3</div></div>
+    <div id="click">Haz clic para jugar</div>
+    <div id="help">WASD moverse · Ratón apuntar · Clic disparar · Esc soltar ratón</div>
+  </div>
+
+  <div id="overlay">
+    <div class="panel">
+      <h1>PIUM PIUM<br /><span>LABERINTO</span></h1>
+      <p class="tag">1v1 · encuentra la salida · si te matan reapareces en cualquier sitio</p>
+
+      <div id="lobby">
+        <button id="btn-create">Crear sala</button>
+        <div class="row">
+          <input id="input-code" maxlength="8" placeholder="CÓDIGO" autocomplete="off" />
+          <button id="btn-join">Unirse</button>
+        </div>
+        <button id="btn-solo" class="ghost">Practicar solo</button>
+      </div>
+
+      <div id="waiting" hidden>
+        <p id="wait-title">Esperando rival…</p>
+        <div id="share" hidden>
+          <p class="code" id="room-code"></p>
+          <div class="row">
+            <input id="room-link" readonly />
+            <button id="btn-copy">Copiar</button>
+          </div>
+          <p class="small">Mándale el enlace. Conectar puede tardar 5–20 s.</p>
+        </div>
+        <button id="btn-cancel" class="ghost">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
