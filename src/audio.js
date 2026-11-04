@@ -115,6 +115,56 @@ export function jump() {
   osc.start(t); osc.stop(t + 0.2);
 }
 
+export function hurt() {
+  if (!ctx) return;
+  const t = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  const g = ctx.createGain();
+  osc.type = 'sawtooth';
+  osc.frequency.setValueAtTime(180, t);
+  osc.frequency.exponentialRampToValueAtTime(70, t + 0.15);
+  env(g, t, 0.25, 0.003, 0.15);
+  osc.connect(g); g.connect(sfxBus);
+  osc.start(t); osc.stop(t + 0.2);
+}
+
+export function explosion(volume = 1) {
+  if (!ctx) return;
+  const t = ctx.currentTime;
+  const src = noiseSource(1.2);
+  const f = ctx.createBiquadFilter();
+  const g = ctx.createGain();
+  f.type = 'lowpass';
+  f.frequency.setValueAtTime(1800, t);
+  f.frequency.exponentialRampToValueAtTime(80, t + 1.1);
+  env(g, t, 0.9 * volume, 0.005, 1.1);
+  src.connect(f); f.connect(g); g.connect(sfxBus);
+  src.start(t);
+  const osc = ctx.createOscillator();
+  const g2 = ctx.createGain();
+  osc.frequency.setValueAtTime(90, t);
+  osc.frequency.exponentialRampToValueAtTime(30, t + 0.6);
+  env(g2, t, 0.8 * volume, 0.005, 0.6);
+  osc.connect(g2); g2.connect(sfxBus);
+  osc.start(t); osc.stop(t + 0.7);
+}
+
+export function groan(volume = 1) {
+  if (!ctx || volume < 0.05) return;
+  const t = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  const f = ctx.createBiquadFilter();
+  const g = ctx.createGain();
+  osc.type = 'sawtooth';
+  const base = 70 + Math.random() * 40;
+  osc.frequency.setValueAtTime(base, t);
+  osc.frequency.linearRampToValueAtTime(base * 0.7, t + 0.8);
+  f.type = 'bandpass'; f.frequency.value = 400; f.Q.value = 3;
+  env(g, t, 0.3 * volume, 0.1, 0.8);
+  osc.connect(f); f.connect(g); g.connect(sfxBus);
+  osc.start(t); osc.stop(t + 1);
+}
+
 export const respawn = () => ctx && tone([220, 330, 440, 660], 0.07, 'sine', 0.3);
 export const beep = (high = false) => ctx && tone([high ? 880 : 440], 0.15, 'square', 0.2);
 export const win = () => ctx && tone([523, 659, 784, 1047, 784, 1047], 0.1, 'square', 0.25);

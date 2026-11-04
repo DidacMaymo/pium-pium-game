@@ -1,10 +1,13 @@
-// Mapas deterministas a partir de una semilla: todos los jugadores generan el mismo mapa.
-// Cada casilla tiene una altura: 0 = suelo, 0.7 = caja baja, 1.5 = caja alta, WALL = pared.
+// Mapas: laberinto y arena aleatoria (deterministas a partir de una semilla) y mapas dibujados
+// en texto (mapdefs.js). Cada casilla tiene una altura: 0 = suelo, 0.7 = caja baja,
+// 1.5 = caja alta, WALL = pared, LAVA = lava (parkour). Además puede haber objetos móviles.
+import { ARENA_MAPS, TRAINING_MAP, PARKOUR_LEVELS } from './mapdefs.js';
 
 export const TILE = 3; // metros por casilla
 export const WALL = Infinity;
 export const LOW = 0.7;   // se sube con un salto normal
 export const HIGH = 1.5;  // solo con doble salto
+export const LAVA = -2;   // suelo de lava del parkour (caer = volver al checkpoint)
 
 export const MAZE_SIZES = { facil: 6, media: 9, dificil: 12 };
 export const MAZE_LABELS = { facil: 'Fácil', media: 'Media', dificil: 'Difícil' };
@@ -24,6 +27,7 @@ const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 function makeMap(props) {
   const { W, H, h } = props;
   const map = {
+    base: 0, lava: false, movers: [], barrels: [], navBlocked: new Set(),
     ...props,
     height: (x, y) => (x < 0 || y < 0 || x >= W || y >= H ? WALL : h[y * W + x]),
     isWall: (x, y) => map.height(x, y) === WALL,
@@ -155,5 +159,129 @@ export function generateArena(seed, size = 13) {
   const cells = [];
   for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) if (h[at(x, y)] === 0) cells.push({ x, y });
 
-  return makeMap({ kind: 'arena', seed, W, H, h, exit: null, cells, spawns, wallH: 5, ceiling: false });
+  return makeMap({ kind: 'arena', seed, W, H, h, exit: null, cells, spawns, wallH: 5, ceiling: false, name: 'Aleatoria' });
+}
+
+// ---------- Mapas en texto ----------
+
+const ARENA_CHARS = { '#': WALL, '.': 0, b: LOW, B: HIGH, S: 0, X: 0, E: 0, H: 0, V: 0 };
+
+/** Posición/caja de un objeto móvil en el instante t (s desde el inicio de la ronda). Determinista. */
+export function moverBox(m, t) {
+  const k = (2 * Math.PI * t) / m.period + m.phase;
+  const half = (TILE * 0.96) / 2;
+  if (m.type === 'piston') {
+    const top = m.h0 + (m.h1 - m.h0) * (0.5 - 0.5 * Math.cos(k));
+    return { cx: m.x * TILE, cz: m.y * TILE, hx: half, hz: half, y0: m.base, y1: top };
+  }
+  const off = m.amp * Math.sin(k);
+  return {
+    cx: m.x * TILE + (m.axis === 'x' ? off : 0),
+    cz: m.y * TILE + (m.axis === 'z' ? off : 0),
+    hx: m.axis === 'x' ? half : half * 0.4,
+    hz: m.axis === 'z' ? half : half * 0.4,
+    y0: m.y0, y1: m.y1,
+  };
+}
+
+function parseRows(rows, legend) {
+  const H = rows.length;
+  const W = Math.max(...rows.map((r) => r.length));
+  const h = new Float32Array(W * H);
+  const tags = [];
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const ch = rows[y][x] ?? ' ';
+      const v = legend(ch);
+      if (v === undefined) throw new Error(`Carácter desconocido '${ch}' en (${x},${y})`);
+      h[y * W + x] = v;
+      if (!'#. 123456789b'.includes(ch) || (ch === 'b' && legend === parkourLegend)) tags.push({ ch, x, y });
+    }
+  }
+  return { W, H, h, tags };
+}
+
+function arenaLegend(ch) { return ARENA_CHARS[ch]; }
+
+function buildFromRows(def, kind, seed) {
+  const { W, H, h, tags } = parseRows(def.rows, arenaLegend);
+  const map = { kind, seed, W, H, h, exit: null, wallH: 5, ceiling: false, name: def.name };
+  map.spawns = [];
+  map.movers = [];
+  map.barrels = [];
+  map.navBlocked = new Set();
+  let nb = 0;
+  for (const { ch, x, y } of tags) {
+    const phase = (x * 7 + y * 13) % 10;
+    if (ch === 'S') map.spawns.push({ x, y });
+    else if (ch === 'X') map.barrels.push({ id: `x-${nb++}`, x, y });
+    else if (ch === 'E') {
+      map.movers.push({ type: 'piston', x, y, base: 0, h0: 0.2, h1: 2.6, period: 6, phase });
+      map.navBlocked.add(y * W + x);
+    } else if (ch === 'H' || ch === 'V') {
+      const axis = ch === 'H' ? 'x' : 'z';
+      map.movers.push({ type: 'slide', x, y, axis, amp: TILE, y0: 0, y1: 2.2, period: 5, phase });
+      for (const d of [-1, 0, 1]) map.navBlocked.add(axis === 'x' ? y * W + x + d : (y + d) * W + x);
+    }
+  }
+  const barrelSet = new Set(map.barrels.map((b) => b.y * W + b.x));
+  map.cells = [];
+  for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+    const i = y * W + x;
+    if (h[i] === 0 && !map.navBlocked.has(i) && !barrelSet.has(i)) map.cells.push({ x, y });
+  }
+  if (!map.spawns.length) map.spawns = map.cells.slice(0, 4);
+  return makeMap(map);
+}
+
+export function buildArena(mapId, seed) {
+  const def = ARENA_MAPS[mapId] ?? ARENA_MAPS.aleatoria;
+  if (def.procedural) return generateArena(seed);
+  return buildFromRows(def, 'arena', seed);
+}
+
+export function buildTraining(seed) {
+  return buildFromRows(TRAINING_MAP, 'training', seed);
+}
+
+function parkourLegend(ch) {
+  if (ch === ' ') return LAVA;
+  if (ch >= '1' && ch <= '9') return Number(ch) * 0.5;
+  if (ch >= 'a' && ch <= 'i') return (ch.charCodeAt(0) - 96) * 0.5; // checkpoint
+  if ('SFJZEMN'.includes(ch)) return 0; // se corrige con la definición del nivel
+  return undefined;
+}
+
+export function buildParkour(levelIdx, seed) {
+  const def = PARKOUR_LEVELS[levelIdx] ?? PARKOUR_LEVELS[0];
+  const { W, H, h, tags } = parseRows(def.rows, parkourLegend);
+  const map = {
+    kind: 'parkour', seed, W, H, h, exit: null, wallH: 12, ceiling: false, name: def.name,
+    base: LAVA, lava: true, movers: [], barrels: [], checkpoints: [], localPowerups: [], spawns: [],
+  };
+  let npu = 0;
+  for (const { ch, x, y } of tags) {
+    const i = y * W + x;
+    const phase = (x * 7 + y * 13) % 10;
+    if (ch === 'S') { h[i] = def.startH * 0.5; map.start = { x, y }; map.spawns.push({ x, y }); }
+    else if (ch === 'F') { h[i] = def.finishH * 0.5; map.finish = { x, y }; }
+    else if (ch >= 'a' && ch <= 'i') map.checkpoints.push({ x, y, h: h[i] });
+    else if (ch === 'J' || ch === 'Z') {
+      h[i] = def.puH * 0.5;
+      map.localPowerups.push({ id: 1000 + npu++, type: ch === 'J' ? 'jump' : 'hyper', x, y });
+    } else if (ch === 'E') {
+      h[i] = LAVA;
+      map.movers.push({ type: 'piston', x, y, base: LAVA, h0: 0.25, h1: def.pistonMax ?? 3, period: 5, phase });
+    } else if (ch === 'M' || ch === 'N') {
+      h[i] = LAVA;
+      const top = def.moverH * 0.5;
+      map.movers.push({ type: 'slide', x, y, axis: ch === 'M' ? 'x' : 'z', amp: TILE, y0: top - 0.5, y1: top, period: 4, phase });
+    }
+  }
+  map.cells = [map.start];
+  return makeMap(map);
+}
+
+export function mapCount(kind) {
+  return kind === 'parkour' ? PARKOUR_LEVELS.length : Object.keys(ARENA_MAPS).length;
 }

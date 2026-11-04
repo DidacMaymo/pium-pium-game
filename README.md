@@ -1,30 +1,40 @@
 # Pium Pium Laberinto
 
-Shooter láser en primera persona, de 2 a 8 jugadores. Cada ronda genera un mapa nuevo a partir de una semilla.
+Shooter láser en primera persona, de 1 a 8 jugadores (y bots). Cada ronda genera un mapa nuevo o usa uno dibujado a mano.
 
 **Modos**
-- **Laberinto**: gana quien encuentre antes la salida verde. Si te matan, estás 3 s fuera y reapareces
-  en un sitio aleatorio, lejos de la salida y de los demás. Dificultad Fácil, Media o Difícil (tamaño del laberinto).
-- **Arena**: todos contra todos en un mapa pequeño con pilares y cajas. Gana el primero que llega a 5, 10 o 20 bajas.
-  Reapareces a los 2 s fuera de la vista de los rivales, con 1,5 s de invulnerabilidad.
+- **Laberinto**: gana quien encuentre antes la salida verde. Si te matan, reapareces lejos de la salida.
+  Dificultad Fácil, Media o Difícil (tamaño del laberinto). Solo láser.
+- **Arena**: todos contra todos. Gana el primero a 5, 10 o 20 bajas. Reapareces fuera de la vista de los rivales.
+- **Juego de armas**: cada baja te da el arma siguiente (pistola → subfusil → rifle → escopeta → francotirador → láser).
+  Gana quien consiga una baja con la última.
+- **Zombis**: cooperativo por oleadas, cada vez más zombis, más rápidos y más duros. Perdéis si caéis todos a la vez.
+- **Parkour**: carrera sobre lava con checkpoints y cronómetro. Solo contra el reloj (se guarda tu récord) o contra amigos.
+- **Entrenamiento**: 5 blancos (fijos, móviles y lejanos) para practicar con cada arma; mide precisión y tiempo por serie.
 
-**Power-ups** (flotan y brillan; caducan y se pierden al morir)
-- ⚡ **Turbo**: corres un 75 % más rápido durante 8 s.
-- ⇈ **Doble salto**: 12 s. Sirve para subir a las cajas altas de la arena.
-- 🔫 **Láser automático**: mantén el clic para disparar en ráfaga durante 8 s.
+**Bots** (Laberinto, Arena, Juego de armas): de 1 a 7, en Fácil, Normal o Difícil. Se puede jugar solo contra bots.
+
+**Armas**: pistola, subfusil, rifle, escopeta, francotirador (clic derecho para apuntar con mira) y láser.
+Vida 100, se regenera a los 4 s sin recibir daño, y los disparos a la cabeza hacen ×1,5.
+
+**Mapas de arena**: Coliseo, Torres, Pasillos y Aleatoria. Tienen pistones que te elevan, muros deslizantes
+y barriles explosivos (con reacción en cadena).
+
+**Power-ups** (rotan: nunca hay más de 2 del mismo tipo; caducan y se pierden al morir)
+- ⚡ **Turbo** ×1,75 durante 8 s · ⚡⚡ **Hipervelocidad** ×2 durante 5 s
+- ⇈ **Doble salto** 12 s · 🔫 **Ráfaga**: cualquier arma automática y más rápida durante 8 s
+- 🎯 **Francotirador** durante 15 s · ✚ **Botiquín**: vida al máximo
 
 **Ajustes**: sensibilidad del ratón, campo de visión, volumen de música y de efectos (se guardan en el navegador).
-
-**Online sin servidor:** el multijugador es P2P (WebRTC) con [Trystero](https://github.com/dmotz/trystero).
-Los relays públicos de Nostr solo sirven para que los dos navegadores se encuentren; después, la partida
-va directa navegador a navegador. No hay que pagar ni mantener nada.
 
 ## Jugar
 
 1. Uno elige el modo, pulsa **Crear sala** y pasa el enlace (o el código) a los demás.
-2. Los demás abren el enlace y pulsan **Unirse**. Se puede entrar a mitad de partida.
+2. Los demás abren el enlace y pulsan **Unirse** (con el enlace solo ven el botón de unirse),
+   o escriben el código en el menú principal. Se puede entrar a mitad de partida.
 3. El host pulsa **¡Empezar!**.
-4. Clic en la pantalla para capturar el ratón. WASD moverse, Espacio saltar, clic disparar, Esc pausa, R otra ronda.
+4. Clic en la pantalla para capturar el ratón. WASD moverse, Espacio saltar, clic disparar, clic derecho apuntar,
+   1-6 o la rueda para cambiar de arma, Esc pausa, R otra ronda.
 
 ## Desarrollo
 
@@ -37,20 +47,36 @@ Para probar el multijugador en local, abre dos pestañas (o dos navegadores) en 
 
 | Fichero | Qué hace |
 | --- | --- |
-| `src/maps.js` | Laberinto y arena con semilla (alturas por casilla: suelo, cajas, paredes) |
+| `src/maps.js` | Laberinto y arena aleatoria con semilla, lector de mapas en texto, objetos móviles |
+| `src/mapdefs.js` | **Mapas dibujados en texto**: arenas, campo de tiro y niveles de parkour |
+| `src/weapons.js` | Armas: daño, cadencia, dispersión, modelo 3D |
+| `src/bots.js` | IA de bots y zombis (camino más corto por la rejilla, puntería según dificultad) |
 | `src/spawn.js` | Spawns iniciales justos y reaparición fuera de la vista de los enemigos |
-| `src/game.js` | Escena Three.js, movimiento, saltos y colisiones, disparos, power-ups |
+| `src/game.js` | Escena Three.js, movimiento, saltos y colisiones, vida, disparos, power-ups, parkour, entrenamiento |
 | `src/powerups.js` | Tipos de power-up, iconos dibujados en canvas, modelo flotante |
 | `src/net.js` | Sala P2P con Trystero, acciones de red |
-| `src/main.js` | Lobby, host/invitados, marcador, arbitraje de victoria y power-ups |
+| `src/main.js` | Lobby, host/invitados, marcador, arbitraje de victoria, power-ups, barriles, oleadas zombi |
 | `src/audio.js` | Efectos y música synthwave sintetizados con WebAudio |
 | `src/settings.js` | Ajustes del jugador (localStorage) |
+
+### Hacer tus propios mapas
+
+Abre `src/mapdefs.js`: cada mapa es un dibujo en texto donde cada carácter es una casilla de 3×3 m
+(la leyenda está al principio del fichero). Añade una entrada a `ARENA_MAPS` o `PARKOUR_LEVELS` y aparecerá
+sola en el menú. Para los niveles de parkour, comprueba que se pueden superar con la física del juego:
+
+```bash
+npm run check-parkour
+```
 
 ### Modelo de red
 
 - Malla P2P: todos conectados con todos (bien hasta ~8 jugadores).
-- El **host** (quien crea la sala) genera la semilla, lleva el marcador, reparte los power-ups
-  y decide quién gana (así se evitan empates por latencia). Si el host se va, la partida termina.
+- El **host** (quien crea la sala) genera la semilla, lleva el marcador, reparte los power-ups,
+  simula los bots y los zombis, gestiona los barriles y decide quién gana (así se evitan empates por latencia).
+  Si el host se va, la partida termina.
+- Los objetos móviles (pistones, muros, plataformas) no se envían por red: se mueven según el tiempo
+  de la ronda, igual en todos los ordenadores.
 - Cada jugador es autoridad de su propia posición. Los impactos los detecta quien dispara.
   Entre amigos sirve; no tiene protección contra trampas.
 - Posición y orientación se envían a 20 Hz y se interpolan en el otro lado.

@@ -13,7 +13,14 @@ const APP_ID = 'pium-pium-laberinto-v1';
 const TURN = [];
 
 // Nombres de acción cortos (Trystero limita su longitud a 12 bytes)
-const ACTIONS = ['hi', 'start', 'st', 'shot', 'hit', 'died', 'exit', 'end', 'again', 'sc', 'pus', 'pick', 'got'];
+const ACTIONS = [
+  'hi', 'start', 'st', 'shot', 'hit', 'died', 'exit', 'end', 'again', 'sc', 'pus', 'pick', 'got',
+  'ents',  // host -> todos: posiciones de bots y zombis
+  'ehit',  // -> host: daño a un bot, zombi o barril
+  'boom',  // host -> todos: un barril explota
+  'brl',   // host -> todos: barriles destruidos
+  'wave',  // host -> todos: estado de la oleada zombi
+];
 
 export function createNet(roomCode, handlers) {
   const room = joinRoom({ appId: APP_ID, ...(TURN.length ? { turnConfig: TURN } : {}) }, roomCode);

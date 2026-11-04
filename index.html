@@ -10,15 +10,22 @@
   <div id="app"></div>
 
   <div id="hud">
+    <div id="hurt"></div>
+    <div id="scope" hidden><div class="scope-ring"></div></div>
     <div id="score"></div>
     <div id="feed"></div>
+    <div id="wave" hidden></div>
+    <div id="timer" hidden></div>
+    <div id="train" hidden></div>
     <div id="crosshair"></div>
     <div id="hitmarker">✕</div>
     <div id="toasts"></div>
     <div id="msg"><div id="msg-main"></div><div id="msg-sub"></div></div>
     <div id="pu-bar"></div>
+    <div id="health" hidden><span id="hp-num">100</span><div class="hp-track"><div id="hp-bar"></div></div></div>
+    <div id="weapons" hidden></div>
     <div id="dead"><div>TE HAN FRITO</div><div id="dead-count">3</div></div>
-    <div id="help">WASD moverse · Espacio saltar · Clic disparar · Esc pausa</div>
+    <div id="help">WASD moverse · Espacio saltar · Clic disparar · Clic dcho. apuntar · 1-6 / rueda armas · Esc pausa</div>
   </div>
 
   <div id="pause" hidden>
@@ -36,10 +43,8 @@
       <div id="lobby">
         <input id="input-name" maxlength="14" placeholder="Tu nombre" autocomplete="off" class="name" />
 
-        <div class="modes">
-          <label><input type="radio" name="mode" value="maze" checked /><span><b>Laberinto</b><small>Encuentra la salida</small></span></label>
-          <label><input type="radio" name="mode" value="arena" /><span><b>Arena</b><small>Todos contra todos</small></span></label>
-        </div>
+        <div class="modes" id="modes"></div>
+
         <div class="row opt" id="opt-diff">
           <span>Dificultad</span>
           <select id="sel-diff">
@@ -48,6 +53,8 @@
             <option value="dificil">Difícil (enorme)</option>
           </select>
         </div>
+        <div class="row opt" id="opt-map" hidden><span>Mapa</span><select id="sel-map"></select></div>
+        <div class="row opt" id="opt-level" hidden><span>Nivel</span><select id="sel-level"></select></div>
         <div class="row opt" id="opt-goal" hidden>
           <span>Bajas para ganar</span>
           <select id="sel-goal">
@@ -56,10 +63,19 @@
             <option value="20">20</option>
           </select>
         </div>
+        <div class="row opt" id="opt-bots">
+          <span>Bots</span>
+          <select id="sel-bots">
+            <option value="0" selected>Sin bots</option>
+            <option value="1">1</option><option value="2">2</option><option value="3">3</option>
+            <option value="4">4</option><option value="5">5</option><option value="7">7</option>
+          </select>
+        </div>
+        <div class="row opt" id="opt-skill" hidden><span>Nivel de los bots</span><select id="sel-skill"></select></div>
 
         <button id="btn-create">Crear sala</button>
-        <div class="row">
-          <input id="input-code" maxlength="8" placeholder="CÓDIGO" autocomplete="off" class="code-in" />
+        <div class="row" id="join-row">
+          <input id="input-code" maxlength="80" placeholder="CÓDIGO O ENLACE" autocomplete="off" class="code-in" />
           <button id="btn-join">Unirse</button>
         </div>
         <div class="row">
@@ -68,15 +84,24 @@
         </div>
       </div>
 
+      <div id="join-only" hidden>
+        <p>Te han invitado a la sala</p>
+        <p class="code" id="join-code-label"></p>
+        <input id="input-name-join" maxlength="14" placeholder="Tu nombre" autocomplete="off" class="name" />
+        <button id="btn-join-only">Unirse</button>
+        <button id="btn-own-game" class="ghost small-btn">o crear mi propia partida</button>
+      </div>
+
       <div id="waiting" hidden>
         <p id="wait-title">Esperando jugadores…</p>
+        <p id="wait-mode" class="small"></p>
         <div id="share" hidden>
           <p class="code" id="room-code"></p>
           <div class="row">
             <input id="room-link" readonly />
             <button id="btn-copy">Copiar</button>
           </div>
-          <p class="small">Mándales el enlace. Conectar puede tardar 5–20 s. Pueden entrar a mitad de partida.</p>
+          <p class="small">Mándales el enlace o el código. Conectar puede tardar 5–20 s. Pueden entrar a mitad de partida.</p>
         </div>
         <p id="wait-players" class="small"></p>
         <button id="btn-start" hidden>¡Empezar!</button>

@@ -16,7 +16,7 @@ export function hasLOS(map, ax, az, bx, bz) {
 
 /** Spawns iniciales justos y deterministas para n jugadores. */
 export function initialSpawns(map, n) {
-  if (map.kind === 'arena') return Array.from({ length: n }, (_, i) => map.spawns[i % map.spawns.length]);
+  if (map.kind !== 'maze') return Array.from({ length: n }, (_, i) => map.spawns[i % map.spawns.length]);
 
   const rand = mulberry32(map.seed ^ 0x9e3779b9);
   const far = map.cells.filter((c) => c.d >= map.maxDist * 0.6);

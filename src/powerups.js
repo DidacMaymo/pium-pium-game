@@ -3,11 +3,38 @@ import * as THREE from 'three';
 
 export const POWERUPS = {
   speed: { label: 'Turbo', color: '#ffd23d', duration: 8 },
+  hyper: { label: 'HIPERVELOCIDAD x2', color: '#ff9a1f', duration: 5 },
   jump: { label: 'Doble salto', color: '#3dff7a', duration: 12 },
-  auto: { label: 'Láser automático', color: '#ff4a3d', duration: 8 },
+  auto: { label: 'Ráfaga', color: '#ff4a3d', duration: 8 },
+  sniper: { label: 'Francotirador', color: '#4aa8ff', duration: 15 },
+  medkit: { label: 'Botiquín', color: '#ff5a8a', duration: 0 },
 };
 export const POWERUP_TYPES = Object.keys(POWERUPS);
 export const RESPAWN_MS = 12000;
+export const MAX_SAME = 2; // nunca más de 2 del mismo tipo en el mapa
+
+/** Qué power-ups salen en cada modo. */
+export const MODE_POWERUPS = {
+  maze: ['speed', 'hyper', 'jump', 'auto', 'sniper'],
+  arena: ['speed', 'hyper', 'jump', 'auto', 'sniper', 'medkit'],
+  gungame: ['speed', 'hyper', 'jump', 'medkit'], // sin armas extra: rompería la progresión
+  zombies: ['speed', 'hyper', 'jump', 'auto', 'sniper', 'medkit'],
+};
+
+/**
+ * Elige el siguiente tipo para que roten: entre los permitidos con menos copias en el mapa
+ * (máx. MAX_SAME), evitando repetir el último que salió.
+ */
+export function pickPowerupType(mode, current, last) {
+  const allowed = MODE_POWERUPS[mode] ?? POWERUP_TYPES;
+  const count = (t) => current.filter((p) => p.type === t).length;
+  let pool = allowed.filter((t) => count(t) < MAX_SAME);
+  if (!pool.length) return null;
+  const min = Math.min(...pool.map(count));
+  pool = pool.filter((t) => count(t) === min);
+  if (pool.length > 1) pool = pool.filter((t) => t !== last);
+  return pool[Math.floor(Math.random() * pool.length)];
+}
 
 function drawIcon(g, type, s) {
   g.fillStyle = '#fff';
@@ -30,6 +57,24 @@ function drawIcon(g, type, s) {
       g.moveTo(c - 20, c + off + 12); g.lineTo(c, c + off - 8); g.lineTo(c + 20, c + off + 12);
       g.stroke();
     }
+  } else if (type === 'hyper') {
+    // dos rayos
+    for (const dx of [-14, 14]) {
+      g.beginPath();
+      g.moveTo(c + dx + 4, c - 30); g.lineTo(c + dx - 13, c + 3); g.lineTo(c + dx - 1, c + 3);
+      g.lineTo(c + dx - 6, c + 30); g.lineTo(c + dx + 13, c - 5); g.lineTo(c + dx + 1, c - 5);
+      g.closePath();
+      g.fill();
+    }
+  } else if (type === 'sniper') {
+    // mira telescópica
+    g.lineWidth = 7;
+    g.beginPath(); g.arc(c, c, 24, 0, Math.PI * 2); g.stroke();
+    g.beginPath(); g.moveTo(c - 36, c); g.lineTo(c + 36, c); g.moveTo(c, c - 36); g.lineTo(c, c + 36); g.stroke();
+  } else if (type === 'medkit') {
+    // cruz
+    g.fillRect(c - 9, c - 30, 18, 60);
+    g.fillRect(c - 30, c - 9, 60, 18);
   } else if (type === 'auto') {
     // tres balas
     for (const dx of [-18, 0, 18]) {
