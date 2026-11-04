@@ -115,6 +115,18 @@ export function jump() {
   osc.start(t); osc.stop(t + 0.2);
 }
 
+export function punch() {
+  if (!ctx) return;
+  const t = ctx.currentTime;
+  const src = noiseSource(0.12);
+  const f = ctx.createBiquadFilter();
+  const g = ctx.createGain();
+  f.type = 'lowpass'; f.frequency.value = 900;
+  env(g, t, 0.7, 0.002, 0.1);
+  src.connect(f); f.connect(g); g.connect(sfxBus);
+  src.start(t);
+}
+
 export function hurt() {
   if (!ctx) return;
   const t = ctx.currentTime;

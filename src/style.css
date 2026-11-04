@@ -85,3 +85,19 @@ input.name { margin-bottom: 10px; text-align: center; }
 #join-only p { margin: 4px 0; }
 .small-btn { font-size: 13px; padding: 6px; border: none; }
 #wait-mode { color: #ff3df2; opacity: 1; }
+
+/* Tienda zombi y mejoras */
+#points { position: absolute; left: 16px; bottom: 62px; font-weight: bold; color: #ffd23d; text-shadow: 0 0 6px #000; }
+#perks { position: absolute; left: 16px; bottom: 88px; display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+#perks span { color: #6fd13a; text-shadow: 0 0 6px #000; }
+#shop { position: fixed; inset: 0; display: flex; align-items: safe center; justify-content: center; background: rgba(6, 3, 12, .85); padding: 16px; overflow-y: auto; z-index: 5; }
+.shop-panel { background: #120a22; border: 2px solid #6fd13a; border-radius: 12px; padding: 20px; width: min(520px, 100%); }
+.shop-panel h2 { color: #6fd13a; margin-top: 0; }
+#shop-points { color: #ffd23d; font-size: 20px; font-weight: bold; }
+#shop-items { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+@media (max-width: 480px) { #shop-items { grid-template-columns: 1fr; } }
+.shop-item { margin: 0; text-align: left; background: #1d1430; color: #fff; border-color: #6fd13a; display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; }
+.shop-item b { grid-column: 1; }
+.shop-item small { grid-column: 1; opacity: .75; font-weight: normal; font-size: 12px; }
+.shop-item em { grid-column: 2; grid-row: 1 / 3; align-self: center; font-style: normal; color: #ffd23d; }
+.shop-item.off { opacity: .45; }

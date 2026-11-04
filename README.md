@@ -20,10 +20,18 @@ Vida 100, se regenera a los 4 s sin recibir daño, y los disparos a la cabeza ha
 **Mapas de arena**: Coliseo, Torres, Pasillos y Aleatoria. Tienen pistones que te elevan, muros deslizantes
 y barriles explosivos (con reacción en cadena).
 
+**Zombis**: si caes, esperas a que tu equipo supere la oleada (o a que te revivan). Puntos: 10 por impacto,
+100 por zombi y 250 por oleada superada en pie. Con **B** abres la tienda: Botiquín, Revivir equipo,
+Segunda Vida, Puño de Hierro (el puñetazo con **V** revienta zombis), Refresco Blindado (200 de vida),
+Cola Doble Tiro y Pack-a-Pium (doble daño). Las mejoras se pierden al caer.
+
+**Puñetazo (V)** en todos los modos con armas. En el Juego de armas, un puñetazo *humilla*: la víctima baja de nivel.
+
 **Power-ups** (rotan: nunca hay más de 2 del mismo tipo; caducan y se pierden al morir)
 - ⚡ **Turbo** ×1,75 durante 8 s · ⚡⚡ **Hipervelocidad** ×2 durante 5 s
 - ⇈ **Doble salto** 12 s · 🔫 **Ráfaga**: cualquier arma automática y más rápida durante 8 s
 - 🎯 **Francotirador** durante 15 s · ✚ **Botiquín**: vida al máximo
+- 🌙 **Gravedad lunar**: saltos flotantes durante 10 s · 👻 **Fantasma**: casi invisible 8 s (los bots solo te ven de cerca)
 
 **Ajustes**: sensibilidad del ratón, campo de visión, volumen de música y de efectos (se guardan en el navegador).
 
@@ -45,6 +53,23 @@ npm run dev
 
 Para probar el multijugador en local, abre dos pestañas (o dos navegadores) en la URL que imprime Vite.
 
+### Tests (ejecútalos antes de subir cambios)
+
+```bash
+npm run check
+```
+
+```bash
+npm run test:e2e
+```
+
+- `npm run check`: lint (ESLint) + tests unitarios (Vitest) + comprobación de los niveles de parkour. Tarda segundos.
+- `npm run test:e2e`: abre navegadores reales (Playwright) y juega cada modo; el multijugador se prueba con
+  dos navegadores conectados por un relay local (`tests/e2e/support/`), sin depender de internet.
+  La primera vez: `npx playwright install chromium`.
+- GitHub Actions ejecuta todo en cada push y **solo publica la web si todo pasa** (`.github/workflows/ci.yml`).
+- En modo desarrollo la consola tiene `window.__game`, `window.__bots` y `window.__roster()` para depurar.
+
 | Fichero | Qué hace |
 | --- | --- |
 | `src/maps.js` | Laberinto y arena aleatoria con semilla, lector de mapas en texto, objetos móviles |
@@ -55,6 +80,11 @@ Para probar el multijugador en local, abre dos pestañas (o dos navegadores) en 
 | `src/game.js` | Escena Three.js, movimiento, saltos y colisiones, vida, disparos, power-ups, parkour, entrenamiento |
 | `src/powerups.js` | Tipos de power-up, iconos dibujados en canvas, modelo flotante |
 | `src/net.js` | Sala P2P con Trystero, acciones de red |
+| `src/shop.js` | Tienda zombi: precios y reglas de compra |
+| `src/util.js` | Códigos de sala, formato de tiempos |
+| `src/parkourCheck.js` | Comprueba con la física del juego que un nivel de parkour se puede superar |
+| `tests/unit/` | Tests unitarios (Vitest) |
+| `tests/e2e/` | Tests en navegador (Playwright) |
 | `src/main.js` | Lobby, host/invitados, marcador, arbitraje de victoria, power-ups, barriles, oleadas zombi |
 | `src/audio.js` | Efectos y música synthwave sintetizados con WebAudio |
 | `src/settings.js` | Ajustes del jugador (localStorage) |

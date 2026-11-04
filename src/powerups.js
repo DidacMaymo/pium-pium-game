@@ -8,6 +8,8 @@ export const POWERUPS = {
   auto: { label: 'Ráfaga', color: '#ff4a3d', duration: 8 },
   sniper: { label: 'Francotirador', color: '#4aa8ff', duration: 15 },
   medkit: { label: 'Botiquín', color: '#ff5a8a', duration: 0 },
+  moon: { label: 'Gravedad lunar', color: '#c8c8ff', duration: 10 },
+  ghost: { label: 'Fantasma', color: '#9affff', duration: 8 },
 };
 export const POWERUP_TYPES = Object.keys(POWERUPS);
 export const RESPAWN_MS = 12000;
@@ -15,10 +17,10 @@ export const MAX_SAME = 2; // nunca más de 2 del mismo tipo en el mapa
 
 /** Qué power-ups salen en cada modo. */
 export const MODE_POWERUPS = {
-  maze: ['speed', 'hyper', 'jump', 'auto', 'sniper'],
-  arena: ['speed', 'hyper', 'jump', 'auto', 'sniper', 'medkit'],
-  gungame: ['speed', 'hyper', 'jump', 'medkit'], // sin armas extra: rompería la progresión
-  zombies: ['speed', 'hyper', 'jump', 'auto', 'sniper', 'medkit'],
+  maze: ['speed', 'hyper', 'jump', 'auto', 'sniper', 'moon', 'ghost'],
+  arena: ['speed', 'hyper', 'jump', 'auto', 'sniper', 'medkit', 'moon', 'ghost'],
+  gungame: ['speed', 'hyper', 'jump', 'medkit', 'moon', 'ghost'], // sin armas extra: rompería la progresión
+  zombies: ['speed', 'hyper', 'jump', 'auto', 'sniper', 'medkit', 'moon', 'ghost'],
 };
 
 /**
@@ -71,6 +73,22 @@ function drawIcon(g, type, s) {
     g.lineWidth = 7;
     g.beginPath(); g.arc(c, c, 24, 0, Math.PI * 2); g.stroke();
     g.beginPath(); g.moveTo(c - 36, c); g.lineTo(c + 36, c); g.moveTo(c, c - 36); g.lineTo(c, c + 36); g.stroke();
+  } else if (type === 'moon') {
+    // luna creciente: círculo menos otro desplazado (recortado al primero)
+    g.save();
+    g.beginPath(); g.arc(c, c, 30, 0, Math.PI * 2); g.clip();
+    g.beginPath(); g.arc(c, c, 30, 0, Math.PI * 2); g.arc(c + 14, c - 8, 26, 0, Math.PI * 2);
+    g.fill('evenodd');
+    g.restore();
+  } else if (type === 'ghost') {
+    // fantasma
+    g.beginPath();
+    g.arc(c, c - 6, 24, Math.PI, 0);
+    g.lineTo(c + 24, c + 28);
+    for (let i = 0; i < 4; i++) g.lineTo(c + 24 - (i * 2 + 1) * 6, c + (i % 2 ? 28 : 18));
+    g.lineTo(c - 24, c + 28);
+    g.closePath();
+    g.fill();
   } else if (type === 'medkit') {
     // cruz
     g.fillRect(c - 9, c - 30, 18, 60);

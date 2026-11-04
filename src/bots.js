@@ -115,7 +115,7 @@ export class BotManager {
   }
 
   #zombie(z, dt, now, everyone) {
-    const targets = everyone.filter((e) => !e.isBot && e.alive);
+    const targets = everyone.filter((e) => !e.isBot && e.alive && (!e.ghost || Math.hypot(e.x - z.x, e.z - z.z) < 6));
     if (!targets.length) return;
     const t = nearest(z, targets);
     const d = Math.hypot(t.x - z.x, t.z - z.z);
@@ -132,7 +132,9 @@ export class BotManager {
 
   #bot(b, dt, now, everyone) {
     const w = WEAPONS[b.weapon] ?? WEAPONS.pistol;
-    const enemies = everyone.filter((e) => e.id !== b.id && e.alive && !e.inv && e.kind !== 'zombie');
+    // a un "fantasma" solo lo ven de cerca
+    const enemies = everyone.filter((e) => e.id !== b.id && e.alive && !e.inv && e.kind !== 'zombie' &&
+      (!e.ghost || Math.hypot(e.x - b.x, e.z - b.z) < 6));
     const maxRange = Math.min(w.range, this.mode === 'maze' ? 25 : 45);
     // objetivo visible más cercano (o quien le haya disparado)
     let target = null, best = Infinity;
@@ -217,9 +219,8 @@ export class BotManager {
     const dx = nx * TILE - b.x, dz = ny * TILE - b.z;
     const d = Math.hypot(dx, dz);
     if (d < 0.35) { b.path.shift(); return; }
-    const step = Math.min(d, speed * dt);
-    b.x += (dx / d) * step;
-    b.z += (dz / d) * step;
+    // con colisiones: si el bot se ha desviado (esquivando, empujado) no debe cortar esquinas
+    this.#moveDir(b, dx, dz, Math.min(d, speed * dt));
   }
 
   #moveDir(b, dx, dz, step) {

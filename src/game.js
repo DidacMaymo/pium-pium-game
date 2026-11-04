@@ -21,13 +21,15 @@ const REGEN_DELAY = 4000;
 const REGEN_RATE = 25; // vida por segundo
 const BARREL_RADIUS = 5;
 const BARREL_DMG = 110;
+const MELEE = { range: 2.4, dmg: 50, punchDmg: 600, cd: 0.7 };
+const SECOND_LIFE_MS = 3000;
 
 /** Reglas por modo: tiempo muerto, invulnerabilidad al reaparecer y armas disponibles. */
 export const RULES = {
   maze: { deathMs: 3000, invulnMs: 0, weapons: ['laser'] },
   arena: { deathMs: 2000, invulnMs: 1500, weapons: LOADOUT },
   gungame: { deathMs: 2000, invulnMs: 1500, weapons: null }, // el arma la marca tu nivel
-  zombies: { deathMs: 6000, invulnMs: 2000, weapons: LOADOUT },
+  zombies: { deathMs: Infinity, invulnMs: 2000, weapons: LOADOUT }, // caído hasta superar la oleada (o que te revivan)
   training: { deathMs: 0, invulnMs: 0, weapons: LOADOUT },
   parkour: { deathMs: 0, invulnMs: 0, weapons: [] },
 };
@@ -273,6 +275,11 @@ export class Game {
     this.deadUntil = 0;
     this.invulnUntil = 0;
     this.hp = MAX_HP;
+    this.maxHp = MAX_HP;
+    this.perks = new Set();
+    this.reviving = false;
+    this.meleeCd = 0;
+    this.hud.perks([]);
     this.lastHurt = 0;
     this.ended = false;
     this.exitSent = false;
@@ -296,7 +303,7 @@ export class Game {
     this.hud.dead(false);
     this.hud.scope(false);
     this.hud.message('', '');
-    this.hud.health(this.hp, mode !== 'parkour' && mode !== 'training');
+    this.hud.health(this.hp, mode !== 'parkour' && mode !== 'training', this.maxHp);
     this.hud.timer(mode === 'parkour' ? 0 : null);
   }
 
@@ -360,14 +367,14 @@ export class Game {
     }
   }
 
-  #refreshGun() {
+  #refreshGun(force = false) {
     const id = this.currentWeapon;
-    if (this.gun?.id === id) return;
+    if (this.gun?.id === id && !force) return;
     if (this.gun) { this.gunHolder.remove(this.gun.group); disposeGroup(this.gun.group); }
     this.gun = null;
     this.setZoom(false);
     if (id) {
-      const m = makeGunModel(id, this.myColor);
+      const m = makeGunModel(id, this.perks?.has('pap') ? 0xffd23d : this.myColor);
       this.gun = { id, ...m };
       this.gunHolder.add(m.group);
     }
@@ -385,13 +392,15 @@ export class Game {
 
   // ---------- Eventos de red ----------
 
-  remoteState(id, { r, p, yw, d, i, w }) {
+  remoteState(id, { r, p, yw, d, i, w, rv, g }) {
     const a = this.avatars.get(id);
     if (!a || r !== this.seed) return;
     const wasDead = a.dead;
     a.tx = p[0]; a.ty = p[1]; a.tz = p[2]; a.tyaw = yw;
     a.dead = !!d;
     a.inv = !!i;
+    a.rv = !!rv;
+    a.ghost = !!g;
     if (a.r !== r || a.fresh || (wasDead && !d)) {
       a.x = a.tx; a.y = a.ty; a.z = a.tz; a.yaw = yw;
       a.fresh = false;
@@ -418,10 +427,20 @@ export class Game {
     this.hp -= dmg;
     this.lastHurt = now;
     this.hud.hurt();
-    this.hud.health(Math.max(0, this.hp), true);
+    this.hud.health(Math.max(0, this.hp), true, this.maxHp);
     if (this.hp > 0) { sfx.hurt(); return; }
     this.dead = true;
-    this.deadUntil = now + this.rules.deathMs;
+    // Segunda Vida: te levantas en el sitio y conservas tus mejoras
+    this.reviving = this.perks.has('secondlife');
+    if (this.reviving) {
+      this.perks.delete('secondlife');
+      this.deadUntil = now + SECOND_LIFE_MS;
+    } else {
+      this.deadUntil = now + this.rules.deathMs;
+      this.perks.clear();
+      this.maxHp = MAX_HP;
+    }
+    this.hud.perks([...this.perks]);
     this.keys.clear();
     this.mouseHeld = false;
     this.setZoom(false);
@@ -430,7 +449,7 @@ export class Game {
     sfx.death();
     this.hud.dead(true);
     this.#sendState();
-    this.onDied(by, weapon);
+    this.onDied(by, weapon, this.reviving);
   }
 
   gotHit(fromId, { r, dmg = 100, w, by }) {
@@ -442,6 +461,18 @@ export class Game {
   revive() {
     if (!this.dead || this.ended) return;
     this.deadUntil = performance.now();
+  }
+
+  // ---------- Mejoras de la tienda (zombis) ----------
+
+  applyPerk(id) {
+    sfx.powerup();
+    if (id === 'medkit') { this.hp = this.maxHp; this.hud.health(this.hp, true, this.maxHp); return; }
+    if (id === 'revive') return; // lo gestiona el host
+    this.perks.add(id);
+    if (id === 'armor') { this.maxHp = 200; this.hp = 200; this.hud.health(this.hp, true, this.maxHp); }
+    if (id === 'pap') this.#refreshGun(true);
+    this.hud.perks([...this.perks]);
   }
 
   // ---------- Barriles ----------
@@ -494,7 +525,7 @@ export class Game {
     if (this.dead || !POWERUPS[type]) return;
     sfx.powerup();
     this.hud.toast(POWERUPS[type].label + '!', POWERUPS[type].color);
-    if (type === 'medkit') { this.hp = MAX_HP; this.hud.health(this.hp, true); return; }
+    if (type === 'medkit') { this.hp = this.maxHp; this.hud.health(this.hp, true, this.maxHp); return; }
     this.activePu[type] = performance.now() + POWERUPS[type].duration * 1000;
     if (type === 'sniper') this.#refreshGun();
   }
@@ -755,10 +786,15 @@ export class Game {
   /** Humanos (para la IA de los bots, solo en el host). */
   humans(selfId) {
     const out = [];
-    if (this.active) out.push({ id: selfId, x: this.pos.x, y: this.feetY, z: this.pos.z, alive: !this.dead, inv: performance.now() < this.invulnUntil });
+    if (this.active) {
+      out.push({
+        id: selfId, x: this.pos.x, y: this.feetY, z: this.pos.z,
+        alive: !this.dead || this.reviving, inv: performance.now() < this.invulnUntil, ghost: this.has('ghost'),
+      });
+    }
     for (const a of this.avatars.values()) {
       if (a.kind !== 'player' || a.r !== this.seed || performance.now() - a.lastSeen > 3000) continue;
-      out.push({ id: a.id, x: a.x, y: a.y, z: a.z, alive: !a.dead, inv: a.inv });
+      out.push({ id: a.id, x: a.x, y: a.y, z: a.z, alive: !a.dead || a.rv, inv: a.inv, ghost: a.ghost });
     }
     return out;
   }
@@ -803,6 +839,7 @@ export class Game {
       const digit = /^Digit([1-9])$/.exec(e.code);
       if (digit && this.active) this.selectWeapon(this.allowedWeapons()[Number(digit[1]) - 1]);
       this.keys.add(e.code);
+      if (e.code === 'KeyV' && !e.repeat) this.#melee();
       if (e.code === 'KeyR' && this.active) {
         if (this.mode === 'training') this.#resetTraining();
         else if (this.ended) this.onRematch();
@@ -875,14 +912,16 @@ export class Game {
 
     // Muerte / reaparición
     if (this.dead) {
-      this.hud.deadCountdown(Math.ceil((this.deadUntil - now) / 1000));
-      if (now >= this.deadUntil && !this.ended && this.respawnBlocked !== true) {
-        this.#placeMe(pickRespawn(this.map, this.#enemyPositions()));
+      this.hud.deadCountdown(Number.isFinite(this.deadUntil) ? Math.ceil((this.deadUntil - now) / 1000) : null);
+      if (now >= this.deadUntil && !this.ended) {
+        // con Segunda Vida te levantas donde caíste; si no, lejos de los enemigos
+        if (!this.reviving) this.#placeMe(pickRespawn(this.map, this.#enemyPositions()));
+        this.reviving = false;
         this.dead = false;
-        this.hp = MAX_HP;
-        this.invulnUntil = now + this.rules.invulnMs;
+        this.hp = this.maxHp;
+        this.invulnUntil = now + Math.max(this.rules.invulnMs, this.mode === 'zombies' ? 2000 : 0);
         this.hud.dead(false);
-        this.hud.health(this.hp, true);
+        this.hud.health(this.hp, true, this.maxHp);
         sfx.respawn();
         this.#refreshGun();
         this.#sendState();
@@ -890,9 +929,9 @@ export class Game {
     }
 
     // Regeneración de vida
-    if (!this.dead && this.hp < MAX_HP && now - this.lastHurt > REGEN_DELAY) {
-      this.hp = Math.min(MAX_HP, this.hp + REGEN_RATE * dt);
-      this.hud.health(this.hp, this.mode !== 'parkour' && this.mode !== 'training');
+    if (!this.dead && this.hp < this.maxHp && now - this.lastHurt > REGEN_DELAY) {
+      this.hp = Math.min(this.maxHp, this.hp + REGEN_RATE * dt);
+      this.hud.health(this.hp, this.mode !== 'parkour' && this.mode !== 'training', this.maxHp);
     }
 
     // Power-ups que expiran
@@ -936,7 +975,7 @@ export class Game {
 
     // Gravedad y suelo
     if (!this.dead) {
-      this.vy -= GRAVITY * dt;
+      this.vy -= GRAVITY * (this.has('moon') ? 0.35 : 1) * dt;
       let ny = this.feetY + this.vy * dt;
       const { h: ground, mover } = this.#groundAt(this.pos.x, this.pos.z, this.feetY);
       if (ny <= ground) {
@@ -1019,8 +1058,12 @@ export class Game {
     }
     if (this.gun) {
       const inv = now < this.invulnUntil;
-      this.gun.tip.material.color.set(inv && Math.floor(now / 120) % 2 ? 0xffffff : this.myColor);
+      this.gun.tip.material.color.set(inv && Math.floor(now / 120) % 2 ? 0xffffff : this.perks.has('pap') ? 0xffd23d : this.myColor);
       this.gunHolder.position.z += (-0.46 - this.gunHolder.position.z) * Math.min(1, dt * 15);
+      // animación del puñetazo: el arma baja hacia un lado
+      this.punchAnim = Math.max(0, (this.punchAnim ?? 0) - dt * 4);
+      this.gunHolder.rotation.z = this.punchAnim * 0.9;
+      this.gunHolder.position.x = 0.22 - this.punchAnim * 0.15;
     }
 
     // Avatares (interpolados)
@@ -1037,9 +1080,9 @@ export class Game {
       a.group.position.set(a.x, a.y + (a.kind === 'zombie' ? Math.abs(Math.sin(now / 150 + a.x)) * 0.08 : 0), a.z);
       a.body.rotation.y = a.yaw;
       a.body.visible = !a.dead;
-      a.label.visible = !a.dead;
-      if (a.light) a.light.intensity = a.dead ? 0 : 5; // nunca quitar luces: recompila shaders
-      a.mat.opacity = a.inv ? 0.35 + 0.25 * Math.sin(now / 60) : 1;
+      a.label.visible = !a.dead && !a.ghost;
+      if (a.light) a.light.intensity = a.dead || a.ghost ? 0 : 5; // nunca quitar luces: recompila shaders
+      a.mat.opacity = a.ghost ? 0.12 : a.inv ? 0.35 + 0.25 * Math.sin(now / 60) : 1;
     }
 
     // HUD de power-ups (~10 Hz)
@@ -1082,6 +1125,8 @@ export class Game {
       yw: +this.yaw.toFixed(3),
       d: this.dead ? 1 : 0,
       i: performance.now() < this.invulnUntil ? 1 : 0,
+      rv: this.dead && this.reviving ? 1 : 0,
+      g: this.has('ghost') ? 1 : 0,
       w: this.currentWeapon ?? '',
     });
   }
@@ -1155,7 +1200,8 @@ export class Game {
     const w = WEAPONS[id];
     if (!w || !this.active || this.dead || this.ended || this.cooldown > 0 || performance.now() < this.frozenUntil) return;
     const burst = this.has('auto');
-    this.cooldown = w.cd * (burst ? (w.auto ? 0.7 : 0.45) : 1);
+    this.cooldown = w.cd * (burst ? (w.auto ? 0.7 : 0.45) : 1) * (this.perks.has('doubletap') ? 0.66 : 1);
+    const dmgMult = this.perks.has('pap') ? 2 : 1;
     this.camera.updateMatrixWorld();
     const base = new THREE.Vector3();
     this.camera.getWorldDirection(base);
@@ -1191,21 +1237,22 @@ export class Game {
       if (ud.peerId) {
         const a = this.avatars.get(ud.peerId);
         const hs = a && hit.point.y - a.y > 1.38;
-        const dmg = w.dmg * (hs ? (w.headshot ?? HEADSHOT) : 1);
+        const dmg = w.dmg * dmgMult * (hs ? (w.headshot ?? HEADSHOT) : 1);
         const prev = dmgTo.get(ud.peerId) ?? { dmg: 0, hs: false };
         dmgTo.set(ud.peerId, { dmg: prev.dmg + dmg, hs: prev.hs || hs });
         anyHit = true; anyHs ||= hs;
       } else if (ud.entityId) {
-        dmgTo.set(ud.entityId, { dmg: (dmgTo.get(ud.entityId)?.dmg ?? 0) + w.dmg, hs: false });
+        dmgTo.set(ud.entityId, { dmg: (dmgTo.get(ud.entityId)?.dmg ?? 0) + w.dmg * dmgMult, hs: false });
       } else if (ud.targetIdx !== undefined) {
         const t = this.targets[ud.targetIdx];
         const local = t.disc.worldToLocal(hit.point.clone());
         const hs = Math.hypot(local.x, local.y) < t.r * 0.25;
-        this.#hitTarget(t, w.dmg * (hs ? HEADSHOT : 1), hs);
+        this.#hitTarget(t, w.dmg * dmgMult * (hs ? HEADSHOT : 1), hs);
         anyHit = true; anyHs ||= hs;
       }
     }
-    for (const end of ends) this.#spawnBeam(muzzle, end, this.myColor, w.width);
+    const beamColor = this.perks.has('pap') ? 0xffd23d : this.myColor;
+    for (const end of ends) this.#spawnBeam(muzzle, end, beamColor, w.width * (this.perks.has('pap') ? 1.6 : 1));
     sfx.laser(burst ? 0.7 : 1, w.pitch);
     this.gunHolder.position.z = -0.46 + w.kick;
     this.recoil = Math.min(0.12, (this.recoil ?? 0) + w.kick * 0.25);
@@ -1225,6 +1272,32 @@ export class Game {
     if (!this.solo && this.net) {
       this.net.shot({ a: muzzle.toArray().map((v) => +v.toFixed(2)), e: ends.map((e) => e.toArray().map((v) => +v.toFixed(2))), w: id });
     }
+  }
+
+  /** Puñetazo (V): corto alcance, sirve en todos los modos con armas. */
+  #melee() {
+    const now = performance.now();
+    if (!this.alive || this.ended || now < this.frozenUntil || now < this.meleeCd) return;
+    if (this.mode === 'parkour') return;
+    this.meleeCd = now + MELEE.cd * 1000;
+    this.punchAnim = 1;
+    sfx.punch();
+    this.camera.updateMatrixWorld();
+    const dir = new THREE.Vector3();
+    this.camera.getWorldDirection(dir);
+    this.raycaster.set(this.camera.position, dir);
+    this.raycaster.far = MELEE.range;
+    const targets = [];
+    for (const a of this.avatars.values()) if (a.group.visible && !a.dead && !a.inv) targets.push(a.hitbox);
+    const hit = this.raycaster.intersectObjects(targets, false)[0];
+    if (!hit) return;
+    const id = hit.object.userData.peerId;
+    const a = this.avatars.get(id);
+    const dmg = this.perks.has('punch') ? MELEE.punchDmg : MELEE.dmg;
+    if (a.kind === 'player') this.net?.hit({ r: this.seed, dmg, w: 'punch' }, id);
+    else this.onEntityHit(id, dmg, 'punch');
+    sfx.hit();
+    this.hud.hitmarker(this.perks.has('punch'));
   }
 
   #spawnBeam(a, b, color, width = 0.035) {
@@ -1305,7 +1378,8 @@ export class Game {
     const t = this.elapsed / 1000;
     for (const tg of this.targets) {
       if (!tg.group.visible && now >= tg.downUntil) tg.group.visible = true;
-      let x = tg.x * TILE, z = tg.y * TILE, y = 0;
+      let x = tg.x * TILE, y = 0;
+      const z = tg.y * TILE;
       if (tg.move?.axis === 'x') x += Math.sin((2 * Math.PI * t) / tg.move.period) * tg.move.amp * TILE;
       if (tg.move?.axis === 'y') y = (0.5 + 0.5 * Math.sin((2 * Math.PI * t) / tg.move.period)) * tg.move.amp - 0.6;
       tg.group.position.set(x, y, z);

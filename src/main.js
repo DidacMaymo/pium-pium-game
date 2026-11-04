@@ -8,11 +8,12 @@ import { ARENA_MAPS, PARKOUR_LEVELS } from './mapdefs.js';
 import { WEAPONS, GUNGAME } from './weapons.js';
 import { BotManager, BOT_SKILL, botName } from './bots.js';
 import { pickRespawn, initialSpawns } from './spawn.js';
+import { SHOP, POINTS, canBuy, applyPurchase, losePerks } from './shop.js';
+import { cleanCode, randomCode, fmtTime } from './util.js';
 
 const $ = (id) => document.getElementById(id);
 const MAX_PLAYERS = 8;
 const hex = (c) => '#' + PALETTE[c % PALETTE.length].toString(16).padStart(6, '0');
-const fmtTime = (s) => `${Math.floor(s / 60)}:${(s % 60).toFixed(2).padStart(5, '0')}`;
 
 const MODE_INFO = {
   maze: { name: 'Laberinto', sub: 'Encuentra la salida', online: true, bots: true },
@@ -41,7 +42,7 @@ const hud = {
   overlay: (show) => ($('overlay').hidden = !show),
   message(main, sub = '') { $('msg-main').textContent = main; $('msg-sub').textContent = sub; },
   dead: (on) => $('dead').classList.toggle('on', on),
-  deadCountdown: (n) => ($('dead-count').textContent = Math.max(0, n)),
+  deadCountdown: (n) => ($('dead-count').textContent = n == null ? 'Espera a que tu equipo supere la oleada' : Math.max(0, n)),
   paused: (on) => ($('pause').hidden = !on),
   hitmarker(hs) {
     const el = $('hitmarker');
@@ -54,10 +55,11 @@ const hud = {
     el.classList.add('on');
     requestAnimationFrame(() => requestAnimationFrame(() => el.classList.remove('on')));
   },
-  health(hp, show) {
+  health(hp, show, max = 100) {
     $('health').hidden = !show;
-    $('hp-bar').style.width = `${Math.max(0, hp)}%`;
-    $('hp-bar').style.background = hp > 60 ? '#3dff7a' : hp > 30 ? '#ffd23d' : '#ff3d5a';
+    const frac = Math.max(0, hp) / max;
+    $('hp-bar').style.width = `${frac * 100}%`;
+    $('hp-bar').style.background = frac > 0.6 ? '#3dff7a' : frac > 0.3 ? '#ffd23d' : '#ff3d5a';
     $('hp-num').textContent = Math.ceil(Math.max(0, hp));
   },
   scope: (on) => { $('scope').hidden = !on; $('crosshair').hidden = on; },
@@ -91,6 +93,17 @@ const hud = {
   trainingRecord(weapon, time) {
     const { best } = saveRecord('train-' + weapon, time);
     hud.toast(best ? `¡RÉCORD! ${time.toFixed(2)} s` : `Serie: ${time.toFixed(2)} s`, best ? '#ffd23d' : '#33e0ff');
+  },
+  perks(list) {
+    $('perks').replaceChildren(...list.map((id) => {
+      const d = document.createElement('span');
+      d.textContent = SHOP[id]?.name ?? id;
+      return d;
+    }));
+  },
+  points(n) {
+    $('points').hidden = n == null;
+    if (n != null) $('points').textContent = `${n} pts · B tienda`;
   },
   wave(text) {
     $('wave').hidden = !text;
@@ -164,7 +177,7 @@ function renderScore() {
     stats.textContent =
       m === 'arena' ? `${p.kills} / ${p.deaths}` :
       m === 'gungame' ? `${Math.min(p.level + 1, GUNGAME.length)}/${GUNGAME.length} ${WEAPONS[GUNGAME[Math.min(p.level, GUNGAME.length - 1)]].name}` :
-      m === 'zombies' ? `${p.kills} bajas` :
+      m === 'zombies' ? `${p.kills} bajas · ${p.points} pts` :
       `${p.wins}`;
     d.append(sw, name, stats);
     return d;
@@ -194,8 +207,6 @@ let joinTimeout = null;
 let waveInfo = { n: 0 };
 
 const newSeed = () => (Math.random() * 2 ** 32) >>> 0;
-const randomCode = () =>
-  Array.from({ length: 5 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('');
 const myName = () => settings.name.trim().slice(0, 14) || 'Anónimo';
 const isHostLike = () => role === 'host' || role === 'solo';
 const nameOf = (id) => roster[id]?.name || names.get(id) || (String(id).startsWith('z-') ? 'Zombi' : '???');
@@ -204,13 +215,6 @@ const send = (action, data, target) => net?.send[action](data, target);
 const later = (ms, fn) => timers.push(setTimeout(fn, ms));
 const clearTimers = () => { while (timers.length) clearTimeout(timers.pop()); };
 
-/** Limpia lo que escriban: minúsculas, espacios, o el enlace entero pegado. */
-function cleanCode(raw) {
-  let s = String(raw || '').trim();
-  const hash = s.lastIndexOf('#');
-  if (hash !== -1) s = s.slice(hash + 1);
-  return s.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
-}
 
 // ---------- Bots (solo el host) ----------
 
@@ -222,7 +226,7 @@ const bots = new BotManager({
   died(victimId, killerId, w) {
     announceKill(killerId, victimId, w);
     send('died', { r: currentSeed, by: killerId, v: victimId, w });
-    hostDied(victimId, killerId);
+    hostDied(victimId, killerId, w);
   },
   shot(botId, from, ends, w) {
     game.remoteShot(botId, { a: from, e: ends, w });
@@ -358,7 +362,10 @@ function ensureRoster(id, extra = {}) {
     const used = new Set(Object.values(roster).map((p) => p.color));
     let color = 0;
     while (used.has(color)) color++;
-    roster[id] = { name: id === selfId ? myName() : names.get(id) || '???', color, kills: 0, deaths: 0, wins: 0, level: 0, ...extra };
+    roster[id] = {
+      name: id === selfId ? myName() : names.get(id) || '???', color,
+      kills: 0, deaths: 0, wins: 0, level: 0, points: 0, perks: [], ...extra,
+    };
   }
   return roster[id];
 }
@@ -376,6 +383,8 @@ function applyRoster() {
   if (config.mode === 'gungame' && roster[selfId]) {
     game.setForcedWeapon(GUNGAME[Math.min(roster[selfId].level, GUNGAME.length - 1)]);
   }
+  hud.points(config.mode === 'zombies' && roster[selfId] ? roster[selfId].points : null);
+  if ($('shop').hidden === false) renderShop();
   renderScore();
 }
 
@@ -393,7 +402,8 @@ function hostStartRound() {
   for (const id of peers) ensureRoster(id);
   // bots fuera del roster si ya no se usan
   for (const id of Object.keys(roster)) if (roster[id].bot && !id.startsWith('bot-')) delete roster[id];
-  for (const p of Object.values(roster)) { p.kills = 0; p.deaths = 0; p.level = 0; }
+  for (const p of Object.values(roster)) { p.kills = 0; p.deaths = 0; p.level = 0; p.points = 0; p.perks = []; }
+  closeShop(false);
   const payload = { ...startPayload(order), t: 0 };
   send('start', payload);
   game.startRound({
@@ -445,12 +455,24 @@ function hostEnd(winnerId, extra = {}) {
   showEnd(winnerId, extra);
 }
 
-function hostDied(victimId, killerId) {
+function hostDied(victimId, killerId, w, revivingSoon = false) {
   if (roundOver) return;
-  if (roster[victimId]) roster[victimId].deaths++;
+  const v = roster[victimId];
+  if (v) {
+    v.deaths++;
+    if (config.mode === 'zombies' && !revivingSoon) losePerks(v);
+  }
   const k = killerId && killerId !== victimId ? roster[killerId] : null;
   if (k) k.kills++;
-  if (config.mode === 'gungame' && k) {
+  if (config.mode === 'zombies' && k && String(victimId).startsWith('z-')) k.points += POINTS.kill;
+  // Juego de armas: un puñetazo "humilla": el que cae baja un nivel y el que golpea no sube
+  if (config.mode === 'gungame' && k && w === 'punch') {
+    if (v) {
+      v.level = Math.max(0, v.level - 1);
+      if (v.bot) bots.setWeapon(victimId, GUNGAME[v.level]);
+    }
+    hud.toast(`¡${nameOf(victimId)} HUMILLADO!`, '#ff3df2');
+  } else if (config.mode === 'gungame' && k) {
     k.level++;
     if (k.level >= GUNGAME.length) { broadcastRoster(); hostEnd(killerId); return; }
     if (k.bot) bots.setWeapon(killerId, GUNGAME[k.level]);
@@ -460,7 +482,7 @@ function hostDied(victimId, killerId) {
 }
 
 function announceKill(killerId, victimId, w) {
-  const wname = w === 'barrel' ? 'Barril' : w === 'zombie' ? 'Mordisco' : WEAPONS[w]?.name ?? '';
+  const wname = w === 'barrel' ? 'Barril' : w === 'zombie' ? 'Mordisco' : w === 'punch' ? 'Puñetazo' : WEAPONS[w]?.name ?? '';
   hud.feed([[nameOf(killerId), colorOf(killerId)], [` [${wname}] `], [nameOf(victimId), colorOf(victimId)]]);
 }
 
@@ -546,9 +568,91 @@ function hostBarrel(id, by) {
 }
 
 function hostEntityHit(id, dmg, by, w) {
-  if (String(id).startsWith('x-')) hostBarrel(id, by);
-  else bots.damage(id, dmg, by, w);
+  if (String(id).startsWith('x-')) { hostBarrel(id, by); return; }
+  const target = bots.bots.get(id);
+  const counts = target && !target.dead && target.kind === 'zombie' && roster[by] && !roster[by].bot;
+  bots.damage(id, dmg, by, w);
+  if (counts) { roster[by].points += POINTS.hit; scheduleRosterSync(); }
 }
+
+// Los puntos cambian con cada impacto: agrupar los envíos del marcador (máx. ~4 por segundo)
+let rosterSyncPending = false;
+function scheduleRosterSync() {
+  if (rosterSyncPending) return;
+  rosterSyncPending = true;
+  setTimeout(() => { rosterSyncPending = false; broadcastRoster(); }, 250);
+}
+
+// ---------- Tienda (zombis) ----------
+
+function anyHumanDown() {
+  return game.humans(selfId).some((h) => !h.alive);
+}
+
+function hostRevive() {
+  send('rev', { r: currentSeed });
+  game.revive();
+}
+
+function hostBuy(who, item) {
+  const p = roster[who];
+  const human = game.humans(selfId).find((h) => h.id === who);
+  const check = canBuy(p, item, { alive: !!human?.alive, anyDead: anyHumanDown() });
+  if (!check.ok || roundOver || config.mode !== 'zombies') {
+    const reason = check.reason ?? 'No disponible';
+    if (who === selfId) hud.toast(reason, '#ff3d5a');
+    else send('got', { r: currentSeed, fail: reason }, who);
+    return;
+  }
+  applyPurchase(p, item);
+  broadcastRoster();
+  if (item === 'revive') {
+    hostRevive();
+    hud.feed([[nameOf(who), colorOf(who)], [' ha revivido al equipo']]);
+  } else if (who === selfId) game.applyPerk(item);
+  else send('got', { r: currentSeed, perk: item }, who);
+}
+
+function buy(item) {
+  if (isHostLike()) hostBuy(selfId, item);
+  else send('buy', { r: currentSeed, item }, hostId);
+}
+
+function renderShop() {
+  const me = roster[selfId] ?? { points: 0, perks: [] };
+  $('shop-points').textContent = `${me.points} puntos`;
+  $('shop-items').replaceChildren(...Object.entries(SHOP).map(([id, item]) => {
+    const btn = document.createElement('button');
+    const check = canBuy(me, id, { alive: game.alive, anyDead: anyHumanDown() });
+    btn.className = 'shop-item' + (check.ok ? '' : ' off');
+    const owned = (me.perks ?? []).includes(id);
+    btn.innerHTML = '<b></b><small></small><em></em>';
+    btn.querySelector('b').textContent = item.name;
+    btn.querySelector('small').textContent = item.desc;
+    btn.querySelector('em').textContent = owned ? 'Lo tienes' : `${item.cost}`;
+    btn.onclick = () => { if (check.ok) buy(id); else hud.toast(check.reason, '#ff3d5a'); };
+    return btn;
+  }));
+}
+
+function openShop() {
+  if (config.mode !== 'zombies' || !game.active || game.ended) return;
+  renderShop();
+  $('shop').hidden = false;
+  if (document.pointerLockElement) document.exitPointerLock();
+}
+
+function closeShop(relock = true) {
+  if ($('shop').hidden) return;
+  $('shop').hidden = true;
+  if (relock) game.lock();
+}
+
+window.addEventListener('keydown', (e) => {
+  if (e.code !== 'KeyB' || e.repeat) return;
+  if ($('shop').hidden) openShop(); else closeShop();
+});
+$('btn-shop-close').onclick = () => closeShop();
 
 // Zombis: oleadas
 let zSeq = 0;
@@ -585,6 +689,9 @@ function zombieTick(now) {
   }
   if (waveInfo.toSpawn === 0 && bots.aliveZombies === 0) {
     waveInfo.breakUntil = now + 6000;
+    // bonus a los que siguen en pie
+    for (const h of humans) if (h.alive && roster[h.id]) roster[h.id].points += POINTS.wave;
+    broadcastRoster();
     hud.toast(`¡Oleada ${waveInfo.n} superada!`, '#3dff7a');
     send('wave', { r: currentSeed, n: waveInfo.n, text: `Oleada ${waveInfo.n} superada · siguiente en 6 s` });
     hud.wave(`Oleada ${waveInfo.n} superada · siguiente en 6 s`);
@@ -625,10 +732,12 @@ game.onReachExit = (time) => {
   else send('exit', { r: currentSeed, t: time }, hostId);
 };
 
-game.onDied = (killerId, w) => {
+game.onDied = (killerId, w, revivingSoon) => {
   announceKill(killerId, selfId, w);
-  send('died', { r: currentSeed, by: killerId, w });
-  if (isHostLike()) hostDied(selfId, killerId);
+  send('died', { r: currentSeed, by: killerId, w, rv: revivingSoon ? 1 : 0 });
+  if (isHostLike()) hostDied(selfId, killerId, w, revivingSoon);
+  if (revivingSoon) hud.toast('¡SEGUNDA VIDA!', '#3dff7a');
+  closeShop(false);
 };
 
 game.onPick = (puId) => {
@@ -720,11 +829,17 @@ function connect(code) {
       if (revive) { game.revive(); hud.message(`OLEADA ${n}`, ''); setTimeout(() => { if (!game.ended) hud.message('', ''); }, 1500); }
       renderScore();
     },
-    died({ r, by, v, w }, from) {
+    died({ r, by, v, w, rv }, from) {
       if (r !== currentSeed) return;
       const victim = v ?? from;
       if (victim !== selfId) announceKill(by, victim, w);
-      if (role === 'host' && !v) hostDied(from, by);
+      if (role === 'host' && !v) hostDied(from, by, w, !!rv);
+    },
+    buy({ r, item }, from) {
+      if (role === 'host' && r === currentSeed) hostBuy(from, item);
+    },
+    rev({ r }, from) {
+      if (from === hostId && r === currentSeed) game.revive();
     },
     exit({ r, t }, from) {
       if (role === 'host' && r === currentSeed && (config.mode === 'maze' || config.mode === 'parkour')) hostEnd(from, { time: t });
@@ -741,8 +856,11 @@ function connect(code) {
     pick({ r, id }, from) {
       if (role === 'host' && r === currentSeed) hostPick(id, from);
     },
-    got({ r, type }, from) {
-      if (from === hostId && r === currentSeed) game.applyPowerup(type);
+    got({ r, type, perk, fail }, from) {
+      if (from !== hostId || r !== currentSeed) return;
+      if (fail) hud.toast(fail, '#ff3d5a');
+      else if (perk) game.applyPerk(perk);
+      else game.applyPowerup(type);
     },
   });
   game.net = {

@@ -20,6 +20,8 @@ const ACTIONS = [
   'boom',  // host -> todos: un barril explota
   'brl',   // host -> todos: barriles destruidos
   'wave',  // host -> todos: estado de la oleada zombi
+  'buy',   // -> host: compra en la tienda (zombis)
+  'rev',   // host -> todos: revivir a los caídos
 ];
 
 export function createNet(roomCode, handlers) {
