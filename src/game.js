@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import {
-  TILE, WALL, LAVA, generateMaze, buildArena, buildTraining, buildParkour, moverBox, MAZE_SIZES,
+  TILE, WALL, LAVA, generateMaze, buildArena, buildTraining, buildParkour, buildZombies, applyDoors, moverBox, MAZE_SIZES,
 } from './maps.js';
+import { MAX_PLANKS, START_WEAPON, BOX_WEIGHTS, WALL_PRICES, createZombieWorld, describeUse, addWeapon } from './zombieworld.js';
+import { SHOP } from './shop.js';
 import { initialSpawns, pickRespawn } from './spawn.js';
 import { POWERUPS, makePowerupMesh, animatePowerup } from './powerups.js';
 import { WEAPONS, LOADOUT, MAX_HP, HEADSHOT, makeGunModel, disposeGroup } from './weapons.js';
@@ -23,13 +25,17 @@ const BARREL_RADIUS = 5;
 const BARREL_DMG = 110;
 const MELEE = { range: 2.4, dmg: 50, punchDmg: 600, cd: 0.7 };
 const SECOND_LIFE_MS = 3000;
+const REPAIR_MS = 600; // una tabla cada 0,6 s mientras mantienes E
+const USE_RANGE = 3.4; // metros hasta el centro de la casilla del objeto (la casilla de al lado está a 3; al otro lado de una pared, a 6)
+const BAR_W = 1.2;
 
 /** Reglas por modo: tiempo muerto, invulnerabilidad al reaparecer y armas disponibles. */
 export const RULES = {
   maze: { deathMs: 3000, invulnMs: 0, weapons: ['laser'] },
   arena: { deathMs: 2000, invulnMs: 1500, weapons: LOADOUT },
   gungame: { deathMs: 2000, invulnMs: 1500, weapons: null }, // el arma la marca tu nivel
-  zombies: { deathMs: Infinity, invulnMs: 2000, weapons: LOADOUT }, // caído hasta superar la oleada (o que te revivan)
+  // caído hasta superar la oleada (o que te revivan); empiezas con pistola y el resto se compra
+  zombies: { deathMs: Infinity, invulnMs: 2000, weapons: [START_WEAPON], keepAmmo: true },
   training: { deathMs: 0, invulnMs: 0, weapons: LOADOUT },
   parkour: { deathMs: 0, invulnMs: 0, weapons: [] },
 };
@@ -121,7 +127,15 @@ export class Game {
     this.onDied = () => {};
     this.onPick = () => {};
     this.onEntityHit = () => {}; // (id, dmg, weapon) — bots, zombis, barriles
+    this.onUse = () => {}; // ({ kind, id, cur }) — usar algo del mapa zombi
     this.net = null; // { st, shot, hit }
+    this.selfId = null;
+    this.me = null; // mi entrada en el marcador (puntos, mejoras, armas)
+    this.ammo = {};
+    this.owned = [];
+    this.reloadUntil = 0;
+    this.zw = null;
+    this.z = null; // objetos 3D del mapa zombi
 
     this.#bindInput();
     window.addEventListener('resize', () => this.#resize());
@@ -138,18 +152,18 @@ export class Game {
     this.gun?.tip.material.color.set(this.myColor);
   }
 
-  addPeer(id, kind = 'player') {
+  addPeer(id, kind = 'player', boss = false) {
     if (this.avatars.has(id)) return this.avatars.get(id);
     const zombie = kind === 'zombie';
-    const color = zombie ? 0x6fd13a : PALETTE[1];
+    const color = boss ? 0xff2020 : zombie ? 0x6fd13a : PALETTE[1];
     const group = new THREE.Group();
-    const mat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: zombie ? 0.15 : 0.35, transparent: true });
+    const mat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: boss ? 0.6 : zombie ? 0.15 : 0.35, transparent: true });
     const body = new THREE.Group();
     const capsule = new THREE.Mesh(new THREE.CapsuleGeometry(0.35, 1.0, 6, 12), mat);
     capsule.position.y = 0.85;
     body.add(capsule);
     if (zombie) {
-      const armMat = new THREE.MeshStandardMaterial({ color: 0x4f9a2a });
+      const armMat = new THREE.MeshStandardMaterial({ color: boss ? 0xa01010 : 0x4f9a2a });
       for (const sx of [-0.25, 0.25]) {
         const arm = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.7), armMat);
         arm.position.set(sx, 1.25, -0.4);
@@ -174,19 +188,49 @@ export class Game {
     if (light) { light.position.y = 1.2; group.add(light); }
     const label = new THREE.Sprite(new THREE.SpriteMaterial({ depthWrite: false, transparent: true }));
     label.scale.set(2, 0.5, 1);
-    label.position.y = 2.25;
+    const scale = boss ? 1.5 : 1;
+    body.scale.setScalar(scale);
+    label.position.y = boss ? 3.25 : 2.35;
     group.add(body, label);
     group.visible = false;
     this.scene.add(group);
     capsule.userData.peerId = id;
     const a = {
-      id, kind, group, body, mat, light, label, hitbox: capsule, gunSlot, gunId: null, color, name: '',
+      id, kind, boss, group, body, mat, light, label, hitbox: capsule, gunSlot, gunId: null, color, name: '',
       x: 0, y: 0, z: 0, yaw: 0, tx: 0, ty: 0, tz: 0, tyaw: 0,
       dead: true, inv: false, r: null, fresh: true, lastSeen: 0,
+      headY: 1.38 * scale, hp: null, maxHp: null, hpBg: null, hpFg: null,
     };
+    if (zombie) {
+      // Barra de vida sobre la cabeza (siempre mirando a la cámara)
+      const barY = boss ? 3 : 2.1;
+      const barW = BAR_W * scale;
+      a.hpBg = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0x000000, opacity: 0.75, transparent: true, depthWrite: false }));
+      a.hpBg.scale.set(barW + 0.06, 0.16, 1);
+      a.hpBg.position.y = barY;
+      a.hpBg.renderOrder = 1;
+      a.hpFg = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0x3dff7a, transparent: true, depthWrite: false }));
+      a.hpFg.scale.set(barW, 0.1, 1);
+      a.hpFg.position.y = barY;
+      a.hpFg.renderOrder = 2;
+      a.barW = barW;
+      group.add(a.hpBg, a.hpFg);
+    }
     this.avatars.set(id, a);
-    if (zombie) this.#setLabel(a, 'Zombi', 0x6fd13a);
+    if (zombie) this.#setLabel(a, boss ? 'ZOMBI ROJO' : 'Zombi', color);
     return a;
+  }
+
+  /** Vida de un zombi: barra y número sobre su cabeza. */
+  #setZombieHp(a, hp, maxHp) {
+    if (a.hp === hp && a.maxHp === maxHp) return;
+    a.hp = hp;
+    a.maxHp = maxHp;
+    const frac = Math.max(0.001, Math.min(1, hp / maxHp));
+    a.hpFg.scale.x = a.barW * frac;
+    a.hpFg.center.x = 0.5 / frac; // la barra se vacía hacia la izquierda
+    a.hpFg.material.color.set(frac > 0.6 ? 0x3dff7a : frac > 0.3 ? 0xffd23d : 0xff3d5a);
+    this.#setLabel(a, `${hp}/${maxHp}`, a.color);
   }
 
   removePeer(id) {
@@ -224,13 +268,16 @@ export class Game {
     if (w && WEAPONS[w]) a.gunSlot.add(makeGunModel(w, a.color).group);
   }
 
-  /** Bots y zombis (los manda el host): [id, kind, x, z, yaw, dead, inv, weapon] */
+  /** Bots y zombis (los manda el host): [id, kind, x, z, yaw, dead, inv, weapon, hp, maxHp] */
   setEntities(list) {
     const seen = new Set();
     const now = performance.now();
-    for (const [id, kind, x, z, yaw, dead, inv, w] of list) {
+    let boss = null;
+    for (const [id, kind, x, z, yaw, dead, inv, w, hp, maxHp] of list) {
       seen.add(id);
-      const a = this.avatars.get(id) ?? this.addPeer(id, kind === 1 ? 'zombie' : 'bot');
+      const a = this.avatars.get(id) ?? this.addPeer(id, kind === 0 ? 'bot' : 'zombie', kind === 2);
+      if (a.kind === 'zombie') this.#setZombieHp(a, hp, maxHp);
+      if (kind === 2 && !dead) boss = a;
       const wasDead = a.dead;
       a.tx = x; a.ty = 0; a.tz = z; a.tyaw = yaw;
       a.dead = !!dead; a.inv = !!inv;
@@ -240,6 +287,29 @@ export class Game {
       this.#setAvatarGun(a, w);
     }
     for (const [id, a] of this.avatars) if (a.kind !== 'player' && !seen.has(id)) this.removePeer(id);
+    this.#setBoss(boss);
+  }
+
+  /** El zombi rojo: aviso, ambiente rojo y barra de vida grande mientras siga vivo. */
+  #setBoss(a) {
+    const id = a?.id ?? null;
+    if (id !== this.bossId) {
+      this.bossId = id;
+      const sky = id ? 0x2a0408 : this.baseBg;
+      if (sky != null) {
+        this.scene.background.set(sky);
+        this.scene.fog.color.copy(this.scene.background);
+      }
+      if (id) {
+        sfx.bossRoar();
+        this.shake = 1;
+        this.hud.message('¡ZOMBI ROJO!', 'Mucha más vida y muerde fuerte. Matadlo y recargáis toda la munición');
+        setTimeout(() => { if (!this.ended) this.hud.message('', ''); }, 3000);
+      } else if (this.bossLight) {
+        this.bossLight.intensity = 0;
+      }
+    }
+    this.hud.boss(a ? a.hp / a.maxHp : null);
   }
 
   // ---------- Ronda ----------
@@ -255,6 +325,7 @@ export class Game {
       mode === 'maze' ? generateMaze(seed, MAZE_SIZES[diff] ?? 9) :
       mode === 'training' ? buildTraining(seed) :
       mode === 'parkour' ? buildParkour(level, seed) :
+      mode === 'zombies' ? buildZombies(seed) :
       buildArena(mapId, seed);
     this.seed = seed;
     this.solo = solo;
@@ -296,7 +367,16 @@ export class Game {
     this.lastCountdown = late || mode === 'training' ? 0 : null;
     this.timerStart = this.frozenUntil;
     this.weapon = null;
+    this.ammo = {};
+    this.reloadUntil = 0;
+    this.owned = [...(this.rules.weapons ?? [])];
+    this.bossId = null;
+    this.useTarget = null;
+    this.repairAt = 0;
+    this.hud.boss(null);
+    this.hud.prompt(null);
     this.selectWeapon(this.rules.weapons?.[0] ?? (mode === 'gungame' ? 'pistol' : null));
+    this.#ammoHud();
     if (mode === 'training') this.#resetTraining();
     this.active = true;
     this.hud.overlay(false);
@@ -329,6 +409,9 @@ export class Game {
     this.hud.health(0, false);
     this.hud.timer(null);
     this.hud.training(null);
+    this.hud.ammo(null);
+    this.hud.prompt(null);
+    this.hud.boss(null);
     if (document.pointerLockElement === this.canvas) document.exitPointerLock();
   }
 
@@ -343,7 +426,73 @@ export class Game {
 
   allowedWeapons() {
     if (this.mode === 'gungame') return [this.forcedWeapon ?? 'pistol'];
-    return this.rules.weapons ?? [];
+    return this.owned;
+  }
+
+  // ---------- Munición ----------
+
+  ammoOf(id) {
+    this.ammo[id] ??= { mag: WEAPONS[id].mag, reserve: WEAPONS[id].reserve };
+    return this.ammo[id];
+  }
+
+  /** Rellena una arma (o todas las que tienes si no dices cuál). */
+  refillAmmo(id) {
+    const ids = id ? [id] : Object.keys(this.ammo);
+    for (const w of ids) this.ammo[w] = { mag: WEAPONS[w].mag, reserve: WEAPONS[w].reserve };
+    this.reloadUntil = 0;
+    this.#ammoHud();
+  }
+
+  ammoFull(id) {
+    const a = this.ammoOf(id);
+    return a.mag === WEAPONS[id].mag && a.reserve === WEAPONS[id].reserve;
+  }
+
+  reload() {
+    const id = this.currentWeapon;
+    if (!id || !this.alive || this.ended || this.reloadUntil) return;
+    const a = this.ammoOf(id);
+    if (a.mag >= WEAPONS[id].mag || a.reserve <= 0) return;
+    this.setZoom(false);
+    this.reloadUntil = performance.now() + WEAPONS[id].reload * 1000 * (this.perks?.has('fastreload') ? 0.5 : 1);
+    sfx.reloadSound();
+    this.#ammoHud();
+  }
+
+  #finishReload() {
+    const id = this.currentWeapon;
+    this.reloadUntil = 0;
+    if (id) {
+      const a = this.ammoOf(id);
+      const n = Math.min(WEAPONS[id].mag - a.mag, a.reserve);
+      a.mag += n;
+      a.reserve -= n;
+    }
+    this.#ammoHud();
+  }
+
+  #ammoHud() {
+    const id = this.currentWeapon;
+    if (!id) { this.hud.ammo(null); return; }
+    const a = this.ammoOf(id);
+    this.hud.ammo({ mag: a.mag, reserve: a.reserve, reloading: !!this.reloadUntil });
+  }
+
+  /** Zombis: coges un arma. Si ya la tienes se rellena; con 2 armas, sustituye a la de la mano. */
+  giveWeapon(id) {
+    if (this.owned.includes(id)) {
+      this.refillAmmo(id);
+    } else {
+      const next = addWeapon(this.owned, id, this.weapon);
+      for (const w of this.owned) if (!next.includes(w)) delete this.ammo[w];
+      this.owned = next;
+    }
+    this.weapon = id;
+    this.reloadUntil = 0;
+    this.#refreshGun(true);
+    sfx.buySound();
+    this.hud.toast(WEAPONS[id].name.toUpperCase(), '#ffd23d');
   }
 
   /** Arma real en uso (el power-up de francotirador la sustituye temporalmente). */
@@ -362,6 +511,7 @@ export class Game {
     this.forcedWeapon = id;
     if (this.weapon !== id) {
       this.weapon = id;
+      delete this.ammo[id]; // cada arma nueva llega con la munición llena
       this.#refreshGun();
       if (this.active) this.hud.toast(WEAPONS[id].name.toUpperCase(), '#ffd23d');
     }
@@ -372,6 +522,7 @@ export class Game {
     if (this.gun?.id === id && !force) return;
     if (this.gun) { this.gunHolder.remove(this.gun.group); disposeGroup(this.gun.group); }
     this.gun = null;
+    this.reloadUntil = 0; // cambiar de arma cancela la recarga
     this.setZoom(false);
     if (id) {
       const m = makeGunModel(id, this.perks?.has('pap') ? 0xffd23d : this.myColor);
@@ -379,11 +530,12 @@ export class Game {
       this.gunHolder.add(m.group);
     }
     this.hud.weapons(this.allowedWeapons(), id);
+    if (this.rules) this.#ammoHud();
   }
 
   setZoom(on) {
     const w = WEAPONS[this.currentWeapon];
-    on = !!on && !!w?.zoom && this.alive && !this.ended;
+    on = !!on && !!w?.zoom && this.alive && !this.ended && !this.reloadUntil;
     if (on === this.zoomed) return;
     this.zoomed = on;
     this.hud.scope(on);
@@ -445,7 +597,9 @@ export class Game {
     this.mouseHeld = false;
     this.setZoom(false);
     this.activePu = {};
+    this.reloadUntil = 0;
     this.#refreshGun();
+    this.hud.prompt(null);
     sfx.death();
     this.hud.dead(true);
     this.#sendState();
@@ -527,7 +681,7 @@ export class Game {
     this.hud.toast(POWERUPS[type].label + '!', POWERUPS[type].color);
     if (type === 'medkit') { this.hp = this.maxHp; this.hud.health(this.hp, true, this.maxHp); return; }
     this.activePu[type] = performance.now() + POWERUPS[type].duration * 1000;
-    if (type === 'sniper') this.#refreshGun();
+    if (type === 'sniper') { delete this.ammo.sniper; this.#refreshGun(); }
   }
 
   has(type) {
@@ -542,10 +696,12 @@ export class Game {
     const world = new THREE.Group();
     const open = !map.ceiling;
     const parkour = map.kind === 'parkour';
+    const zombies = map.kind === 'zombies';
 
-    this.scene.fog.near = parkour ? 25 : open ? 18 : 3;
-    this.scene.fog.far = parkour ? 110 : open ? 75 : 26;
-    this.scene.background.set(parkour ? 0x1a0610 : open ? 0x0a0518 : 0x06030c);
+    this.scene.fog.near = parkour ? 25 : open ? 18 : zombies ? 4 : 3;
+    this.scene.fog.far = parkour ? 110 : open ? 75 : zombies ? 30 : 26;
+    this.baseBg = parkour ? 0x1a0610 : open ? 0x0a0518 : 0x06030c;
+    this.scene.background.set(this.baseBg);
     this.scene.fog.color.copy(this.scene.background);
 
     const hue = (this.seed % 360) / 360;
@@ -715,6 +871,14 @@ export class Game {
     const extraLight = new THREE.PointLight(goal ? 0x3dff7a : 0xa07aff, goal ? 12 : 20, goal ? 14 : 30, 1.2);
     extraLight.position.set(...lightPos);
     world.add(extraLight);
+    this.extraLight = extraLight;
+
+    // Zombis: puertas, ventanas, máquinas...
+    this.z = null;
+    this.zw = null;
+    this.bossLight = null;
+    this.zBoxes = [];
+    if (zombies) this.#buildZombieWorld(world, wallTex);
 
     // Entrenamiento: blancos
     this.targets = [];
@@ -741,6 +905,287 @@ export class Game {
 
     this.scene.add(world);
     this.world = world;
+  }
+
+  #buildZombieWorld(world, wallTex) {
+    const map = this.map;
+    const { wallH } = map;
+    const wallMat = new THREE.MeshStandardMaterial({ map: wallTex, roughness: 0.85 });
+    const signTexture = (lines, bg, fg) => canvasTexture(128, (g, s) => {
+      g.fillStyle = bg;
+      g.fillRect(0, 0, s, s);
+      g.strokeStyle = fg;
+      g.lineWidth = 6;
+      g.strokeRect(4, 4, s - 8, s - 8);
+      g.fillStyle = fg;
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      lines.forEach((text, i) => {
+        g.font = `bold ${Math.min(26, Math.floor(210 / Math.max(6, text.length)))}px ui-monospace, monospace`;
+        g.fillText(text, s / 2, s / 2 + (i - (lines.length - 1) / 2) * 30);
+      });
+    }, false);
+    const add = (geo, mat, x, y, z, parent = world) => {
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(x, y, z);
+      parent.add(mesh);
+      return mesh;
+    };
+    const yawOf = ({ dx, dy }) => Math.atan2(dx, dy);
+    const z = { doors: new Map(), windows: new Map(), machines: [], lever: null, leverMat: null, box: null, power: false };
+
+    // Puertas: bloquean el paso y las balas hasta que se abren
+    const doorTex = canvasTexture(64, (g, s) => {
+      g.fillStyle = '#3a2a08';
+      g.fillRect(0, 0, s, s);
+      g.fillStyle = '#ffd23d';
+      for (let i = -s; i < s * 2; i += 20) { g.beginPath(); g.moveTo(i, 0); g.lineTo(i + 10, 0); g.lineTo(i - s + 10, s); g.lineTo(i - s, s); g.fill(); }
+    });
+    for (const d of map.doors) {
+      const mesh = add(new THREE.BoxGeometry(TILE, wallH, TILE), new THREE.MeshStandardMaterial({ map: doorTex, roughness: 0.6 }), d.x * TILE, wallH / 2, d.y * TILE);
+      this.solids.push(mesh);
+      const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTexture(`${d.cost} pts`, 0xffd23d), transparent: true, depthWrite: false, depthTest: false }));
+      sign.scale.set(2.4, 0.6, 1);
+      sign.position.set(d.x * TILE, 2.6, d.y * TILE);
+      world.add(sign);
+      z.doors.set(d.id, { mesh, sign, open: false, box: { cx: d.x * TILE, cz: d.y * TILE, hx: TILE / 2, hz: TILE / 2, y0: 0, y1: wallH } });
+    }
+
+    // Ventanas y puertas de servicio: hueco en la pared tapado con tablas; el zombi espera detrás
+    const plankMat = new THREE.MeshStandardMaterial({ color: 0x8a5a2b, roughness: 0.9 });
+    const backMat = new THREE.MeshBasicMaterial({ color: 0x020104 });
+    for (const w of map.windows) {
+      const cx = w.x * TILE, cz = w.y * TILE;
+      const sill = w.tall ? 0 : 0.7;
+      const top = w.tall ? 2.9 : 2.6;
+      if (sill) this.solids.push(add(new THREE.BoxGeometry(TILE, sill, TILE), wallMat, cx, sill / 2, cz));
+      this.solids.push(add(new THREE.BoxGeometry(TILE, wallH - top, TILE), wallMat, cx, (wallH + top) / 2, cz));
+      const ix = w.in.x - w.x, iy = w.in.y - w.y; // hacia dentro
+      const back = add(new THREE.PlaneGeometry(TILE, wallH), backMat, cx - ix * (TILE / 2 - 0.02), wallH / 2, cz - iy * (TILE / 2 - 0.02));
+      back.rotation.y = Math.atan2(ix, iy);
+      const yaw = Math.atan2(iy, ix) * -1 + Math.PI / 2; // el largo de la tabla, paralelo a la pared
+      const planks = [];
+      for (let i = 0; i < MAX_PLANKS; i++) {
+        const y = sill + 0.2 + (i * (top - sill - 0.4)) / (MAX_PLANKS - 1);
+        const p = add(new THREE.BoxGeometry(TILE * 0.98, 0.26, 0.08), plankMat, cx + ix * (TILE / 2 - 0.06), y, cz + iy * (TILE / 2 - 0.06));
+        p.rotation.y = yaw;
+        p.rotation.z = (i % 2 ? 1 : -1) * 0.05;
+        planks.push(p);
+      }
+      z.windows.set(w.id, { planks });
+      z.windowBox ??= [];
+      z.windowBox.push({ cx, cz, hx: TILE / 2, hz: TILE / 2, y0: 0, y1: wallH });
+    }
+
+    // Armas en la pared: cartel con su precio y el arma colgada
+    for (const b of map.wallBuys) {
+      const { dx, dy } = b.face;
+      const px = b.x * TILE + dx * (TILE / 2 + 0.02), pz = b.y * TILE + dy * (TILE / 2 + 0.02);
+      const poster = add(
+        new THREE.PlaneGeometry(1.8, 1.3),
+        new THREE.MeshBasicMaterial({ map: signTexture([WEAPONS[b.weapon].name, `${WALL_PRICES[b.weapon]} pts`], '#141018', '#ffd23d') }),
+        px, 1.7, pz
+      );
+      poster.rotation.y = yawOf(b.face);
+      const gun = makeGunModel(b.weapon, 0xffd23d);
+      gun.group.position.set(px + dx * 0.08, 2.6, pz + dy * 0.08);
+      gun.group.rotation.y = yawOf(b.face) + Math.PI / 2;
+      gun.group.scale.setScalar(2);
+      world.add(gun.group);
+    }
+
+    // Objetos sobre una alfombra de 1 casilla, que ocupan por completo: nadie se sube a ellos ni se esconde detrás
+    const matTex = canvasTexture(64, (g, s) => {
+      g.fillStyle = '#17121f';
+      g.fillRect(0, 0, s, s);
+      g.strokeStyle = '#ffd23d';
+      g.lineWidth = 3;
+      g.strokeRect(2, 2, s - 4, s - 4);
+    });
+    z.propBoxes = [];
+    for (const p of map.props) {
+      const cx = p.x * TILE, cz = p.y * TILE;
+      z.propBoxes.push({ cx, cz, hx: TILE / 2, hz: TILE / 2, y0: 0, y1: wallH });
+      const floorMat = add(new THREE.PlaneGeometry(TILE, TILE), new THREE.MeshStandardMaterial({ map: matTex }), cx, 0.02, cz);
+      floorMat.rotation.x = -Math.PI / 2;
+      const g = new THREE.Group();
+      g.position.set(cx, 0, cz);
+      g.rotation.y = yawOf(p.face);
+      world.add(g);
+      if (p.kind === 'machine') {
+        const item = SHOP[p.item];
+        const mat = new THREE.MeshStandardMaterial({ color: item.color, emissive: item.color, emissiveIntensity: 0.03, roughness: 0.4 });
+        add(new THREE.BoxGeometry(1.5, 2.3, 1), mat, 0, 1.15, 0, g);
+        const face = new THREE.MeshBasicMaterial({ map: signTexture([...item.name.split(' '), `${item.cost} pts`], '#141018', '#' + new THREE.Color(item.color).getHexString()) });
+        face.color.setScalar(0.3);
+        add(new THREE.PlaneGeometry(1.3, 1.3), face, 0, 1.5, 0.51, g);
+        z.machines.push({ mat, face });
+      } else if (p.kind === 'power') {
+        add(new THREE.BoxGeometry(1.4, 2.4, 0.5), new THREE.MeshStandardMaterial({ color: 0x444455, metalness: 0.5, roughness: 0.4 }), 0, 1.2, -0.3, g);
+        z.leverMat = new THREE.MeshStandardMaterial({ color: 0xff3d5a, emissive: 0xff3d5a, emissiveIntensity: 0.8 });
+        z.lever = add(new THREE.BoxGeometry(0.14, 0.8, 0.14), z.leverMat, 0, 1.5, 0.1, g);
+        z.lever.rotation.x = 0.7;
+        add(new THREE.PlaneGeometry(1.2, 0.9), new THREE.MeshBasicMaterial({ map: signTexture(['ELECTRI', 'CIDAD'], '#141018', '#ffd23d') }), 0, 2, -0.04, g);
+      } else if (p.kind === 'ammo') {
+        add(new THREE.BoxGeometry(1.5, 0.9, 1), new THREE.MeshStandardMaterial({ color: 0x35602a, roughness: 0.8 }), 0, 0.45, 0, g);
+        add(new THREE.PlaneGeometry(1.3, 0.7), new THREE.MeshBasicMaterial({ map: signTexture(['MUNICIÓN', '1000 pts'], '#141018', '#6fd13a') }), 0, 0.5, 0.51, g);
+      } else if (p.kind === 'box') {
+        const mat = new THREE.MeshStandardMaterial({ color: 0x2040a0, emissive: 0x3060ff, emissiveIntensity: 0.5, roughness: 0.5 });
+        add(new THREE.BoxGeometry(2, 1, 1.1), mat, 0, 0.5, 0, g);
+        add(new THREE.PlaneGeometry(1.8, 0.8), new THREE.MeshBasicMaterial({ map: signTexture(['? 950 pts ?'], '#101838', '#ffd23d') }), 0, 0.5, 0.56, g);
+        z.box = { x: cx, z: cz, holder: new THREE.Group(), gun: null, gunId: null, state: 'idle', nextSwap: 0 };
+        z.box.holder.position.set(cx, 1.6, cz);
+        world.add(z.box.holder);
+      } else if (p.kind === 'carpenter') {
+        // El carpintero: un señor con casco y martillo
+        add(new THREE.CapsuleGeometry(0.35, 1, 6, 12), new THREE.MeshStandardMaterial({ color: 0xb06a20 }), 0, 0.85, 0, g);
+        add(new THREE.CylinderGeometry(0.34, 0.38, 0.2, 12), new THREE.MeshStandardMaterial({ color: 0xffd23d }), 0, 1.72, 0, g);
+        add(new THREE.BoxGeometry(0.08, 0.6, 0.08), new THREE.MeshStandardMaterial({ color: 0x6a4a20 }), 0.5, 1, 0.2, g);
+        add(new THREE.BoxGeometry(0.28, 0.14, 0.14), new THREE.MeshStandardMaterial({ color: 0x888899, metalness: 0.7 }), 0.5, 1.3, 0.2, g);
+        const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTexture('Carpintero', 0xffd23d), transparent: true, depthWrite: false }));
+        label.scale.set(2, 0.5, 1);
+        label.position.set(0, 2.2, 0);
+        g.add(label);
+      }
+    }
+
+    // Luz que acompaña al zombi rojo (siempre existe: añadir luces a media partida recompila shaders)
+    this.bossLight = new THREE.PointLight(0xff2020, 0, 16, 1.2);
+    this.bossLight.position.y = 2.5;
+    world.add(this.bossLight);
+    this.extraLight.intensity = 6;
+
+    this.z = z;
+    this.zw = createZombieWorld(map);
+    this.#rebuildZBoxes();
+  }
+
+  #rebuildZBoxes() {
+    const z = this.z;
+    this.zBoxes = [...z.windowBox, ...z.propBoxes];
+    for (const d of z.doors.values()) if (!d.open) this.zBoxes.push(d.box);
+  }
+
+  /** Estado del mundo zombi (lo reparte el host). */
+  setZombieWorld(zw) {
+    const z = this.z;
+    if (!z) return;
+    this.zw = zw;
+    applyDoors(this.map, zw.doors);
+    for (const id of zw.doors) {
+      const d = z.doors.get(id);
+      if (!d || d.open) continue;
+      d.open = true;
+      d.mesh.visible = false;
+      d.sign.visible = false;
+      this.solids = this.solids.filter((m) => m !== d.mesh);
+      if (this.frozenUntil < performance.now()) sfx.doorSound();
+    }
+    for (const [id, w] of z.windows) {
+      const left = zw.planks[id] ?? MAX_PLANKS;
+      w.planks.forEach((p, i) => { p.visible = i < left; });
+    }
+    if (zw.power && !z.power) this.#powerOn();
+    this.#setBoxState(zw.box);
+    this.#rebuildZBoxes();
+  }
+
+  #powerOn() {
+    const z = this.z;
+    z.power = true;
+    for (const m of z.machines) {
+      m.mat.emissiveIntensity = 0.55;
+      m.face.color.setScalar(1);
+    }
+    z.lever.rotation.x = -0.7;
+    z.leverMat.color.set(0x3dff7a);
+    z.leverMat.emissive.set(0x3dff7a);
+    this.extraLight.intensity = 45;
+    this.extraLight.distance = 70;
+    this.scene.fog.near = 8;
+    this.scene.fog.far = 46;
+    sfx.powerOnSound();
+    this.hud.toast('¡HAY ELECTRICIDAD! Las máquinas funcionan', '#33e0ff');
+  }
+
+  #setBoxState(box) {
+    const b = this.z.box;
+    if (!b || b.state === box.state) return;
+    b.state = box.state;
+    if (box.state === 'ready') this.#showBoxGun(box.weapon);
+    if (box.state === 'idle') this.#showBoxGun(null);
+    if (box.state === 'spinning') b.nextSwap = 0;
+  }
+
+  #showBoxGun(id) {
+    const b = this.z.box;
+    if (b.gunId === id) return;
+    if (b.gun) { b.holder.remove(b.gun); disposeGroup(b.gun); }
+    b.gun = null;
+    b.gunId = id;
+    if (id) {
+      const m = makeGunModel(id, 0xffd23d);
+      m.group.scale.setScalar(2.2);
+      b.holder.add(m.group);
+      b.gun = m.group;
+    }
+  }
+
+  #updateBox(dt, now) {
+    const b = this.z?.box;
+    if (!b) return;
+    if (b.state === 'spinning' && now >= b.nextSwap) {
+      const ids = Object.keys(BOX_WEIGHTS);
+      this.#showBoxGun(ids[Math.floor(Math.random() * ids.length)]);
+      b.nextSwap = now + 140;
+    }
+    b.holder.rotation.y += dt * 2;
+  }
+
+  /** Lo más cercano que puedo usar (y qué pasaría): { kind, id, ..., info }. */
+  #findUseTarget() {
+    if (!this.z || !this.zw || !this.alive || this.ended || performance.now() < this.frozenUntil) return null;
+    const map = this.map;
+    const ctx = { zw: this.zw, player: this.me, who: this.selfId, alive: true, anyDead: this.anyDead?.() ?? false };
+    let best = null, bestD = USE_RANGE;
+    const check = (t) => {
+      const d = Math.hypot(t.x * TILE - this.pos.x, t.y * TILE - this.pos.z);
+      if (d >= bestD) return;
+      const info = describeUse(t, ctx);
+      if (!info) return;
+      best = { ...t, info };
+      bestD = d;
+    };
+    for (const d of map.doors) check({ ...d, kind: 'door' });
+    for (const w of map.windows) check({ ...w, kind: 'window' });
+    for (const b of map.wallBuys) check({ ...b, kind: 'wall' });
+    for (const p of map.props) check(p);
+    return best;
+  }
+
+  #updatePrompt() {
+    const t = this.#findUseTarget();
+    this.useTarget = t;
+    if (!t) { this.hud.prompt(null); return; }
+    const { text, cost, ok, reason } = t.info;
+    this.hud.prompt({ text: `E · ${text}` + (cost ? ` · ${cost} pts` : ''), reason: ok ? null : reason });
+  }
+
+  /** Pulsar E (o mantenerlo en una ventana). */
+  #use() {
+    const t = this.#findUseTarget();
+    if (!t) return;
+    if (!t.info.ok) { this.hud.toast(t.info.reason, '#ff3d5a'); return; }
+    if (t.kind === 'wall' && this.owned.includes(t.weapon) && this.ammoFull(t.weapon)) {
+      this.hud.toast('Munición llena', '#ffd23d');
+      return;
+    }
+    if (t.kind === 'ammo' && this.owned.every((w) => this.ammoFull(w))) {
+      this.hud.toast('Munición llena', '#ffd23d');
+      return;
+    }
+    if (t.kind === 'window') this.repairAt = performance.now() + REPAIR_MS;
+    this.onUse({ kind: t.kind, id: t.id, cur: this.weapon });
   }
 
   #disposeWorld() {
@@ -837,12 +1282,20 @@ export class Game {
     window.addEventListener('keydown', (e) => {
       if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) this.#jump(); }
       const digit = /^Digit([1-9])$/.exec(e.code);
-      if (digit && this.active) this.selectWeapon(this.allowedWeapons()[Number(digit[1]) - 1]);
+      if (digit && this.active) {
+        const slot = this.allowedWeapons()[Number(digit[1]) - 1];
+        if (slot) this.selectWeapon(slot); // hueco vacío: te quedas con la que llevas
+      }
       this.keys.add(e.code);
       if (e.code === 'KeyV' && !e.repeat) this.#melee();
-      if (e.code === 'KeyR' && this.active) {
-        if (this.mode === 'training') this.#resetTraining();
-        else if (this.ended) this.onRematch();
+      if (e.code === 'KeyE' && !e.repeat && this.active) this.#use();
+      if (e.code === 'KeyR' && this.active && !e.repeat) {
+        if (this.ended) this.onRematch();
+        else this.reload();
+      }
+      if (e.code === 'KeyT' && this.active && this.mode === 'training') {
+        this.#resetTraining();
+        this.refillAmmo();
       }
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.code));
@@ -886,7 +1339,10 @@ export class Game {
   /** Cajas dinámicas: objetos móviles + barriles vivos. */
   #dynamicBoxes() {
     const out = this.movers.map((m) => m.box);
-    for (const b of this.barrelMeshes) if (!this.deadBarrels.has(b.id)) out.push({ cx: b.x, cz: b.z, hx: 0.45, hz: 0.45, y0: 0, y1: 1.1 });
+    // En zombis no se puede subir a los barriles (los zombis no llegarían a morderte)
+    const barrelTop = this.mode === 'zombies' ? this.map.wallH : 1.1;
+    for (const b of this.barrelMeshes) if (!this.deadBarrels.has(b.id)) out.push({ cx: b.x, cz: b.z, hx: 0.45, hz: 0.45, y0: 0, y1: barrelTop });
+    out.push(...this.zBoxes);
     return out;
   }
 
@@ -923,6 +1379,7 @@ export class Game {
         this.hud.dead(false);
         this.hud.health(this.hp, true, this.maxHp);
         sfx.respawn();
+        if (!this.rules.keepAmmo) this.refillAmmo(); // al reaparecer, munición llena (en zombis la conservas)
         this.#refreshGun();
         this.#sendState();
       }
@@ -1029,6 +1486,19 @@ export class Game {
       }
     }
 
+    // Recarga
+    if (this.reloadUntil && now >= this.reloadUntil) this.#finishReload();
+
+    // Zombis: mantener E repara la ventana; la caja gira
+    if (this.z) {
+      this.#updateBox(dt, now);
+      if (this.keys.has('KeyE') && this.useTarget?.kind === 'window' && now >= this.repairAt) this.#use();
+      if (this.bossLight && this.bossId) {
+        const boss = this.avatars.get(this.bossId);
+        if (boss) { this.bossLight.position.set(boss.x, 2.5, boss.z); this.bossLight.intensity = 40; }
+      }
+    }
+
     // Disparo automático
     this.cooldown = Math.max(0, this.cooldown - dt);
     const w = WEAPONS[this.currentWeapon];
@@ -1064,6 +1534,10 @@ export class Game {
       this.punchAnim = Math.max(0, (this.punchAnim ?? 0) - dt * 4);
       this.gunHolder.rotation.z = this.punchAnim * 0.9;
       this.gunHolder.position.x = 0.22 - this.punchAnim * 0.15;
+      // animación de recarga: el arma baja e inclina
+      const rk = this.reloadUntil ? 1 : 0;
+      this.gunHolder.rotation.x += (rk * -0.8 - this.gunHolder.rotation.x) * Math.min(1, dt * 12);
+      this.gunHolder.position.y += (-0.2 - rk * 0.12 - this.gunHolder.position.y) * Math.min(1, dt * 12);
     }
 
     // Avatares (interpolados)
@@ -1081,6 +1555,7 @@ export class Game {
       a.body.rotation.y = a.yaw;
       a.body.visible = !a.dead;
       a.label.visible = !a.dead && !a.ghost;
+      if (a.hpBg) { a.hpBg.visible = !a.dead; a.hpFg.visible = !a.dead; }
       if (a.light) a.light.intensity = a.dead || a.ghost ? 0 : 5; // nunca quitar luces: recompila shaders
       a.mat.opacity = a.ghost ? 0.12 : a.inv ? 0.35 + 0.25 * Math.sin(now / 60) : 1;
     }
@@ -1089,6 +1564,7 @@ export class Game {
     this.puHudTimer = (this.puHudTimer ?? 0) + dt;
     if (this.puHudTimer > 0.1) {
       this.puHudTimer = 0;
+      if (this.z) this.#updatePrompt();
       this.hud.powerups(Object.entries(this.activePu).map(([type, until]) => ({
         type, left: (until - now) / 1000, frac: (until - now) / (POWERUPS[type].duration * 1000),
       })));
@@ -1199,6 +1675,15 @@ export class Game {
     const id = this.currentWeapon;
     const w = WEAPONS[id];
     if (!w || !this.active || this.dead || this.ended || this.cooldown > 0 || performance.now() < this.frozenUntil) return;
+    if (this.reloadUntil) return;
+    const ammo = this.ammoOf(id);
+    if (ammo.mag <= 0) {
+      this.cooldown = 0.3;
+      if (ammo.reserve > 0) this.reload();
+      else { sfx.emptyClick(); this.hud.toast('¡SIN MUNICIÓN!', '#ff3d5a'); }
+      return;
+    }
+    ammo.mag--;
     const burst = this.has('auto');
     this.cooldown = w.cd * (burst ? (w.auto ? 0.7 : 0.45) : 1) * (this.perks.has('doubletap') ? 0.66 : 1);
     const dmgMult = this.perks.has('pap') ? 2 : 1;
@@ -1236,7 +1721,7 @@ export class Game {
       const ud = hit.object.userData;
       if (ud.peerId) {
         const a = this.avatars.get(ud.peerId);
-        const hs = a && hit.point.y - a.y > 1.38;
+        const hs = a && hit.point.y - a.y > (a.headY ?? 1.38);
         const dmg = w.dmg * dmgMult * (hs ? (w.headshot ?? HEADSHOT) : 1);
         const prev = dmgTo.get(ud.peerId) ?? { dmg: 0, hs: false };
         dmgTo.set(ud.peerId, { dmg: prev.dmg + dmg, hs: prev.hs || hs });
@@ -1268,6 +1753,8 @@ export class Game {
       if (a) { anyHit = true; anyHs ||= hs; }
     }
     if (anyHit) { sfx.hit(); this.hud.hitmarker(anyHs); }
+    if (ammo.mag <= 0 && ammo.reserve > 0) this.reload();
+    this.#ammoHud();
 
     if (!this.solo && this.net) {
       this.net.shot({ a: muzzle.toArray().map((v) => +v.toFixed(2)), e: ends.map((e) => e.toArray().map((v) => +v.toFixed(2))), w: id });

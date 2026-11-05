@@ -7,8 +7,12 @@ import { MAZE_LABELS, TILE } from './maps.js';
 import { ARENA_MAPS, PARKOUR_LEVELS } from './mapdefs.js';
 import { WEAPONS, GUNGAME } from './weapons.js';
 import { BotManager, BOT_SKILL, botName } from './bots.js';
-import { pickRespawn, initialSpawns } from './spawn.js';
-import { SHOP, POINTS, canBuy, applyPurchase, losePerks } from './shop.js';
+import { initialSpawns } from './spawn.js';
+import { SHOP, POINTS, applyPurchase, losePerks } from './shop.js';
+import {
+  START_WEAPON, BOX_SPIN_MS, BOX_TAKE_MS, createZombieWorld, describeUse, findTarget, pickWindow, tearPlank, repairPlank,
+  repairAll, addWeapon, rollBox, isBossWave, waveSize, zombieStats, bossStats,
+} from './zombieworld.js';
 import { cleanCode, randomCode, fmtTime } from './util.js';
 
 const $ = (id) => document.getElementById(id);
@@ -88,7 +92,7 @@ const hud = {
       `Serie ${stats.series}/${stats.total} · ${stats.time.toFixed(1)} s` +
       (stats.last != null ? ` · última ${stats.last.toFixed(2)} s` : '') +
       (best != null ? `\nRécord con esta arma: ${best.toFixed(2)} s` : '') +
-      `\n1-6 cambiar arma · R reiniciar`;
+      `\n1-6 cambiar arma · R recargar · T reiniciar`;
   },
   trainingRecord(weapon, time) {
     const { best } = saveRecord('train-' + weapon, time);
@@ -103,7 +107,29 @@ const hud = {
   },
   points(n) {
     $('points').hidden = n == null;
-    if (n != null) $('points').textContent = `${n} pts · B tienda`;
+    if (n != null) $('points').textContent = `${n} pts`;
+  },
+  ammo(a) {
+    const el = $('ammo');
+    el.hidden = !a;
+    if (!a) return;
+    el.classList.toggle('low', a.mag === 0 && a.reserve === 0);
+    const reloading = document.createElement('em');
+    reloading.textContent = a.reloading ? 'RECARGANDO' : '';
+    const reserve = document.createElement('small');
+    reserve.textContent = `/ ${a.reserve}`;
+    el.replaceChildren(reloading, String(a.mag), reserve);
+  },
+  prompt(p) {
+    const el = $('prompt');
+    el.hidden = !p;
+    if (!p) return;
+    el.classList.toggle('off', !!p.reason);
+    el.textContent = p.reason ? `${p.text} (${p.reason})` : p.text;
+  },
+  boss(frac) {
+    $('boss').hidden = frac == null;
+    if (frac != null) $('boss-bar').style.width = `${Math.max(0, frac) * 100}%`;
   },
   wave(text) {
     $('wave').hidden = !text;
@@ -186,6 +212,8 @@ function renderScore() {
 }
 
 const game = new Game($('app'), hud);
+game.selfId = selfId;
+game.anyDead = () => anyHumanDown();
 
 // ---------- Estado ----------
 
@@ -205,6 +233,7 @@ let puSeq = 0;
 const timers = [];
 let joinTimeout = null;
 let waveInfo = { n: 0 };
+let zw = null; // mundo zombi (autoridad: host): puertas, electricidad, tablas, caja
 
 const newSeed = () => (Math.random() * 2 ** 32) >>> 0;
 const myName = () => settings.name.trim().slice(0, 14) || 'Anónimo';
@@ -233,6 +262,12 @@ const bots = new BotManager({
     send('shot', { a: from, e: ends, w, id: botId });
   },
   reachedExit(botId) { hostEnd(botId); },
+  planks: (id) => zw?.planks[id] ?? 0,
+  tearPlank(id) {
+    if (!zw) return;
+    tearPlank(zw, id);
+    syncZombieWorld();
+  },
 });
 
 let hostTick = null;
@@ -276,7 +311,7 @@ function syncLobbyVisibility() {
   const info = MODE_INFO[mode];
   $('opt-diff').hidden = mode !== 'maze';
   $('opt-goal').hidden = mode !== 'arena';
-  $('opt-map').hidden = !['arena', 'gungame', 'zombies'].includes(mode);
+  $('opt-map').hidden = !['arena', 'gungame'].includes(mode);
   $('opt-level').hidden = mode !== 'parkour';
   $('opt-bots').hidden = !info.bots;
   $('opt-skill').hidden = !info.bots || $('sel-bots').value === '0';
@@ -321,7 +356,7 @@ function describeConfig() {
   const c = config;
   const parts = [MODE_INFO[c.mode].name];
   if (c.mode === 'maze') parts.push(MAZE_LABELS[c.diff]);
-  if (['arena', 'gungame', 'zombies'].includes(c.mode)) parts.push(ARENA_MAPS[c.mapId]?.name);
+  if (['arena', 'gungame'].includes(c.mode)) parts.push(ARENA_MAPS[c.mapId]?.name);
   if (c.mode === 'arena') parts.push(`a ${c.goal} bajas`);
   if (c.mode === 'parkour') parts.push(PARKOUR_LEVELS[c.level]?.name);
   if (MODE_INFO[c.mode].bots && c.bots) parts.push(`${c.bots} bots (${BOT_SKILL[c.skill].label})`);
@@ -364,7 +399,7 @@ function ensureRoster(id, extra = {}) {
     while (used.has(color)) color++;
     roster[id] = {
       name: id === selfId ? myName() : names.get(id) || '???', color,
-      kills: 0, deaths: 0, wins: 0, level: 0, points: 0, perks: [], ...extra,
+      kills: 0, deaths: 0, wins: 0, level: 0, points: POINTS.start, perks: [], weapons: [START_WEAPON], ...extra,
     };
   }
   return roster[id];
@@ -384,7 +419,7 @@ function applyRoster() {
     game.setForcedWeapon(GUNGAME[Math.min(roster[selfId].level, GUNGAME.length - 1)]);
   }
   hud.points(config.mode === 'zombies' && roster[selfId] ? roster[selfId].points : null);
-  if ($('shop').hidden === false) renderShop();
+  game.me = roster[selfId] ?? null;
   renderScore();
 }
 
@@ -402,8 +437,9 @@ function hostStartRound() {
   for (const id of peers) ensureRoster(id);
   // bots fuera del roster si ya no se usan
   for (const id of Object.keys(roster)) if (roster[id].bot && !id.startsWith('bot-')) delete roster[id];
-  for (const p of Object.values(roster)) { p.kills = 0; p.deaths = 0; p.level = 0; p.points = 0; p.perks = []; }
-  closeShop(false);
+  for (const p of Object.values(roster)) {
+    p.kills = 0; p.deaths = 0; p.level = 0; p.points = POINTS.start; p.perks = []; p.weapons = [START_WEAPON];
+  }
   const payload = { ...startPayload(order), t: 0 };
   send('start', payload);
   game.startRound({
@@ -424,7 +460,9 @@ function hostStartRound() {
       ensureRoster(id, { name: botName(i), bot: true });
     }
   }
-  waveInfo = { n: 0, toSpawn: 0, nextSpawn: 0, breakUntil: performance.now() + 3000 };
+  waveInfo = { n: 0, toSpawn: 0, nextSpawn: 0, breakUntil: performance.now() + 3000, boss: false };
+  zw = config.mode === 'zombies' ? createZombieWorld(game.map) : null;
+  if (zw) syncZombieWorld();
   hud.wave(null);
   broadcastRoster();
   initPowerups();
@@ -439,7 +477,10 @@ function hostLateJoin(id) {
   broadcastRoster();
   send('pus', { r: currentSeed, list: powerups }, id);
   send('brl', { r: currentSeed, dead: [...barrelsDead] }, id);
-  if (config.mode === 'zombies') send('wave', { r: currentSeed, n: waveInfo.n, text: waveText() }, id);
+  if (config.mode === 'zombies') {
+    send('wave', { r: currentSeed, n: waveInfo.n, text: waveText() }, id);
+    send('zw', { r: currentSeed, zw }, id);
+  }
 }
 
 function hostEnd(winnerId, extra = {}) {
@@ -464,7 +505,10 @@ function hostDied(victimId, killerId, w, revivingSoon = false) {
   }
   const k = killerId && killerId !== victimId ? roster[killerId] : null;
   if (k) k.kills++;
-  if (config.mode === 'zombies' && k && String(victimId).startsWith('z-')) k.points += POINTS.kill;
+  if (config.mode === 'zombies' && k && String(victimId).startsWith('z-')) {
+    k.points += POINTS.kill;
+    if (bots.bots.get(victimId)?.boss) hostBossDown(killerId);
+  }
   // Juego de armas: un puñetazo "humilla": el que cae baja un nivel y el que golpea no sube
   if (config.mode === 'gungame' && k && w === 'punch') {
     if (v) {
@@ -511,7 +555,7 @@ function spawnPowerup() {
 function initPowerups() {
   powerups = [];
   if (config.mode === 'training' || config.mode === 'parkour') { syncPowerups(); return; }
-  const n = config.mode === 'maze' ? { facil: 3, media: 5, dificil: 7 }[config.diff] : 5;
+  const n = config.mode === 'maze' ? { facil: 3, media: 5, dificil: 7 }[config.diff] : config.mode === 'zombies' ? 3 : 5;
   for (let i = 0; i < n; i++) spawnPowerup();
   syncPowerups();
 }
@@ -583,7 +627,7 @@ function scheduleRosterSync() {
   setTimeout(() => { rosterSyncPending = false; broadcastRoster(); }, 250);
 }
 
-// ---------- Tienda (zombis) ----------
+// ---------- Mundo zombi: puertas, máquinas, caja, ventanas ----------
 
 function anyHumanDown() {
   return game.humans(selfId).some((h) => !h.alive);
@@ -594,71 +638,115 @@ function hostRevive() {
   game.revive();
 }
 
-function hostBuy(who, item) {
+function syncZombieWorld() {
+  send('zw', { r: currentSeed, zw });
+  game.setZombieWorld(zw);
+}
+
+/** Efecto en el juego de un jugador: en el mío directamente, en el de otro por red. */
+function tell(who, msg) {
+  if (who === selfId) applyGot(msg);
+  else send('got', { r: currentSeed, ...msg }, who);
+}
+
+function applyGot({ type, perk, fail, give, refill }) {
+  if (fail) hud.toast(fail, '#ff3d5a');
+  else if (give) game.giveWeapon(give);
+  else if (refill) { game.refillAmmo(); hud.toast('¡MUNICIÓN LLENA!', '#3dff7a'); }
+  else if (perk) game.applyPerk(perk);
+  else game.applyPowerup(type);
+}
+
+function hostGive(who, weapon, cur) {
   const p = roster[who];
-  const human = game.humans(selfId).find((h) => h.id === who);
-  const check = canBuy(p, item, { alive: !!human?.alive, anyDead: anyHumanDown() });
-  if (!check.ok || roundOver || config.mode !== 'zombies') {
-    const reason = check.reason ?? 'No disponible';
-    if (who === selfId) hud.toast(reason, '#ff3d5a');
-    else send('got', { r: currentSeed, fail: reason }, who);
-    return;
+  p.weapons = addWeapon(p.weapons ?? [], weapon, cur);
+  tell(who, { give: weapon });
+}
+
+/** El zombi rojo ha caído: premio para quien lo mata y munición llena para todos. */
+function hostBossDown(killerId) {
+  if (roster[killerId]) roster[killerId].points += POINTS.boss;
+  hud.feed([[nameOf(killerId), colorOf(killerId)], [' ha matado al ZOMBI ROJO', '#ff3d3d']]);
+  send('got', { r: currentSeed, refill: 1 });
+  applyGot({ refill: 1 });
+}
+
+function hostOpenBox(who) {
+  const owned = roster[who].weapons ?? [];
+  zw.box = { state: 'spinning', who, weapon: rollBox(owned) };
+  const seed = currentSeed;
+  later(BOX_SPIN_MS, () => {
+    if (seed !== currentSeed || zw?.box.state !== 'spinning') return;
+    zw.box = { ...zw.box, state: 'ready' };
+    syncZombieWorld();
+    later(BOX_TAKE_MS, () => {
+      if (seed !== currentSeed || zw?.box.state !== 'ready' || zw.box.who !== who) return;
+      zw.box = { state: 'idle' };
+      syncZombieWorld();
+    });
+  });
+}
+
+/** Un jugador usa algo del mapa. El host valida con la misma lógica que le enseña el aviso. */
+function hostUse(who, { kind, id, cur }) {
+  if (roundOver || config.mode !== 'zombies' || !zw) return;
+  const p = roster[who];
+  const target = findTarget(game.map, kind, id);
+  if (!p || !target) return;
+  const alive = !!game.humans(selfId).find((h) => h.id === who)?.alive;
+  const info = describeUse(target, { zw, player: p, who, alive, anyDead: anyHumanDown() });
+  if (!info) return;
+  if (!alive) { tell(who, { fail: 'Estás caído' }); return; }
+  if (!info.ok) { tell(who, { fail: info.reason ?? 'No disponible' }); return; }
+  if (kind !== 'machine') p.points -= info.cost; // las máquinas descuentan en applyPurchase
+
+  if (kind === 'door') {
+    zw.doors = [...zw.doors, id];
+    hud.feed([[nameOf(who), colorOf(who)], [' ha abierto una puerta']]);
+  } else if (kind === 'power') {
+    zw.power = true;
+    hud.feed([[nameOf(who), colorOf(who)], [' ha dado la luz']]);
+  } else if (kind === 'wall') {
+    hostGive(who, target.weapon, cur);
+  } else if (kind === 'ammo') {
+    tell(who, { refill: 1 });
+  } else if (kind === 'carpenter') {
+    repairAll(zw);
+    hud.feed([[nameOf(who), colorOf(who)], [' ha llamado al carpintero']]);
+  } else if (kind === 'window') {
+    if (repairPlank(zw, id)) p.points += POINTS.repair;
+  } else if (kind === 'box') {
+    if (zw.box.state === 'ready') {
+      hostGive(who, zw.box.weapon, cur);
+      zw.box = { state: 'idle' };
+    } else hostOpenBox(who);
+  } else if (kind === 'machine') {
+    applyPurchase(p, target.item);
+    if (target.item === 'revive') {
+      hostRevive();
+      hud.feed([[nameOf(who), colorOf(who)], [' ha revivido al equipo']]);
+    } else tell(who, { perk: target.item });
   }
-  applyPurchase(p, item);
+  syncZombieWorld();
   broadcastRoster();
-  if (item === 'revive') {
-    hostRevive();
-    hud.feed([[nameOf(who), colorOf(who)], [' ha revivido al equipo']]);
-  } else if (who === selfId) game.applyPerk(item);
-  else send('got', { r: currentSeed, perk: item }, who);
+  if (kind === 'door') renderScore();
 }
-
-function buy(item) {
-  if (isHostLike()) hostBuy(selfId, item);
-  else send('buy', { r: currentSeed, item }, hostId);
-}
-
-function renderShop() {
-  const me = roster[selfId] ?? { points: 0, perks: [] };
-  $('shop-points').textContent = `${me.points} puntos`;
-  $('shop-items').replaceChildren(...Object.entries(SHOP).map(([id, item]) => {
-    const btn = document.createElement('button');
-    const check = canBuy(me, id, { alive: game.alive, anyDead: anyHumanDown() });
-    btn.className = 'shop-item' + (check.ok ? '' : ' off');
-    const owned = (me.perks ?? []).includes(id);
-    btn.innerHTML = '<b></b><small></small><em></em>';
-    btn.querySelector('b').textContent = item.name;
-    btn.querySelector('small').textContent = item.desc;
-    btn.querySelector('em').textContent = owned ? 'Lo tienes' : `${item.cost}`;
-    btn.onclick = () => { if (check.ok) buy(id); else hud.toast(check.reason, '#ff3d5a'); };
-    return btn;
-  }));
-}
-
-function openShop() {
-  if (config.mode !== 'zombies' || !game.active || game.ended) return;
-  renderShop();
-  $('shop').hidden = false;
-  if (document.pointerLockElement) document.exitPointerLock();
-}
-
-function closeShop(relock = true) {
-  if ($('shop').hidden) return;
-  $('shop').hidden = true;
-  if (relock) game.lock();
-}
-
-window.addEventListener('keydown', (e) => {
-  if (e.code !== 'KeyB' || e.repeat) return;
-  if ($('shop').hidden) openShop(); else closeShop();
-});
-$('btn-shop-close').onclick = () => closeShop();
 
 // Zombis: oleadas
 let zSeq = 0;
 function waveText() {
   if (!waveInfo.n) return 'Preparaos…';
-  return `OLEADA ${waveInfo.n} · quedan ${waveInfo.toSpawn + bots.aliveZombies}`;
+  const left = waveInfo.toSpawn + bots.aliveZombies + (waveInfo.boss ? 1 : 0);
+  return `OLEADA ${waveInfo.n}${isBossWave(waveInfo.n) ? ' · ¡ZOMBI ROJO!' : ''} · quedan ${left}`;
+}
+
+/** Saca un zombi por la ventana más adecuada. Devuelve false si ahora mismo no cabe. */
+function spawnZombieAtWindow(stats, humans) {
+  const players = humans.filter((h) => h.alive).map((h) => ({ x: h.x / TILE, y: h.z / TILE }));
+  const win = pickWindow(game.map, bots.waitingAtWindows(), players);
+  if (!win) return false;
+  bots.addZombie(`z-${zSeq++}`, win, { ...stats, window: win });
+  return true;
 }
 
 function zombieTick(now) {
@@ -672,22 +760,24 @@ function zombieTick(now) {
     // nueva oleada
     waveInfo.breakUntil = 0;
     waveInfo.n++;
-    waveInfo.toSpawn = 4 + waveInfo.n * 3;
+    waveInfo.toSpawn = waveSize(waveInfo.n);
+    waveInfo.boss = isBossWave(waveInfo.n);
     send('wave', { r: currentSeed, n: waveInfo.n, text: waveText(), revive: true });
     game.revive();
     hud.message(`OLEADA ${waveInfo.n}`, '');
     later(1500, () => { if (!game.ended) hud.message('', ''); });
     renderScore();
   }
+  // El zombi rojo sale el primero de su oleada
+  if (waveInfo.boss && spawnZombieAtWindow(bossStats(waveInfo.n), humans)) waveInfo.boss = false;
   if (waveInfo.toSpawn > 0 && now > waveInfo.nextSpawn && bots.aliveZombies < 25) {
     const n = waveInfo.n;
-    const enemies = humans.filter((h) => h.alive);
-    const tile = pickRespawn(game.map, enemies);
-    bots.addZombie(`z-${zSeq++}`, tile, { hp: 50 + n * 12, speed: Math.min(5.8, 2.6 + n * 0.25), dmg: 15 + n * 2 });
-    waveInfo.toSpawn--;
-    waveInfo.nextSpawn = now + Math.max(250, 900 - n * 50);
+    if (spawnZombieAtWindow(zombieStats(n), humans)) {
+      waveInfo.toSpawn--;
+      waveInfo.nextSpawn = now + Math.max(250, 900 - n * 50);
+    }
   }
-  if (waveInfo.toSpawn === 0 && bots.aliveZombies === 0) {
+  if (waveInfo.toSpawn === 0 && !waveInfo.boss && bots.aliveZombies === 0) {
     waveInfo.breakUntil = now + 6000;
     // bonus a los que siguen en pie
     for (const h of humans) if (h.alive && roster[h.id]) roster[h.id].points += POINTS.wave;
@@ -737,7 +827,11 @@ game.onDied = (killerId, w, revivingSoon) => {
   send('died', { r: currentSeed, by: killerId, w, rv: revivingSoon ? 1 : 0 });
   if (isHostLike()) hostDied(selfId, killerId, w, revivingSoon);
   if (revivingSoon) hud.toast('¡SEGUNDA VIDA!', '#3dff7a');
-  closeShop(false);
+};
+
+game.onUse = (use) => {
+  if (isHostLike()) hostUse(selfId, use);
+  else send('use', { r: currentSeed, ...use }, hostId);
 };
 
 game.onPick = (puId) => {
@@ -835,8 +929,11 @@ function connect(code) {
       if (victim !== selfId) announceKill(by, victim, w);
       if (role === 'host' && !v) hostDied(from, by, w, !!rv);
     },
-    buy({ r, item }, from) {
-      if (role === 'host' && r === currentSeed) hostBuy(from, item);
+    use({ r, kind, id, cur }, from) {
+      if (role === 'host' && r === currentSeed) hostUse(from, { kind, id, cur });
+    },
+    zw({ r, zw: state }, from) {
+      if (from === hostId && r === currentSeed) game.setZombieWorld(state);
     },
     rev({ r }, from) {
       if (from === hostId && r === currentSeed) game.revive();
@@ -856,11 +953,9 @@ function connect(code) {
     pick({ r, id }, from) {
       if (role === 'host' && r === currentSeed) hostPick(id, from);
     },
-    got({ r, type, perk, fail }, from) {
+    got({ r, ...msg }, from) {
       if (from !== hostId || r !== currentSeed) return;
-      if (fail) hud.toast(fail, '#ff3d5a');
-      else if (perk) game.applyPerk(perk);
-      else game.applyPowerup(type);
+      applyGot(msg);
     },
   });
   game.net = {
@@ -992,4 +1087,14 @@ const hashCode = cleanCode(location.hash);
 if (hashCode.length >= 4) showJoinOnly(hashCode);
 else showLobby();
 
-if (import.meta.env.DEV) Object.assign(window, { __game: game, __selfId: selfId, __bots: bots, __roster: () => roster });
+if (import.meta.env.DEV) {
+  Object.assign(window, {
+    __game: game, __selfId: selfId, __bots: bots, __roster: () => roster, __zw: () => zw, __wave: () => waveInfo,
+    // Pasa directamente a la oleada n (para probar el zombi rojo)
+    __startWave(n) {
+      for (const b of [...bots.bots.values()]) if (b.kind === 'zombie') bots.remove(b.id);
+      Object.assign(waveInfo, { n: n - 1, toSpawn: 0, boss: false, breakUntil: 1 });
+    },
+    __sync: () => { broadcastRoster(); },
+  });
+}

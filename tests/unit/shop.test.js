@@ -36,6 +36,10 @@ describe('tienda zombi', () => {
     expect(canBuy(player(5000), 'medkit', { alive: false }).ok).toBe(false);
   });
 
+  it('sin electricidad las máquinas no venden', () => {
+    expect(canBuy(player(5000), 'pap', { power: false }).reason).toBe('Sin electricidad');
+  });
+
   it('artículos desconocidos', () => {
     expect(canBuy(player(5000), 'nuke').ok).toBe(false);
     expect(canBuy(undefined, 'medkit').ok).toBe(false);

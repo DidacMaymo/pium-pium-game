@@ -11,8 +11,55 @@
 //   E  pistón           M / N  plataforma móvil (eje X / Z) a altura `moverH`
 //   J  power-up doble salto   Z  power-up hipervelocidad   (en plataforma de altura `puH`)
 
+// ZOMBIS (ver ZOMBIE_MAP; sin cajas: los zombis deben poder llegar a cualquier sitio)
+//   #  pared o pilar    .  suelo   S  spawn   X  barril
+//   1-9, D  puerta (precio en `doors`)
+//   w  ventana con tablas   g  puerta de servicio con tablas (por ahí entran los zombis)
+//   p s r e f l  arma en la pared: pistola, subfusil, rifle, escopeta, francotirador, láser
+//   P  electricidad   M  caja misteriosa   A  munición   C  carpintero
+//   J T Q V H K R Y  máquinas (ver ZOMBIE_LEGEND.machines)
+
+export const ZOMBIE_LEGEND = {
+  weapons: { p: 'pistol', s: 'smg', r: 'rifle', e: 'shotgun', f: 'sniper', l: 'laser' },
+  machines: { J: 'armor', T: 'doubletap', Q: 'revive', V: 'secondlife', H: 'punch', K: 'pap', R: 'fastreload', Y: 'medkit' },
+};
+
+export const ZOMBIE_MAP = {
+  name: 'Búnker',
+  doors: { 1: 750, 2: 750, 3: 750, 4: 1000, 5: 1000, 6: 1250, 7: 1000, 8: 1000, 9: 1500, D: 1500 },
+  rows: [
+    '####w###w######w##f##g######w#l##w###',
+    '#.P........#.J..T...H....#K.........#',
+    '#..........#.............#..........#',
+    'w....#.....#...#.....#...#.....#....w',
+    '#..........#.............#..........#',
+    '#.....#....#.............#....#.....#',
+    'g..........#...#.....#...#..........g',
+    '#..........#.............#..........#',
+    '#####9############6###########D######',
+    '#Q.........#.............#.........V#',
+    'w..........#.A.........#.#..........w',
+    '#...#......#...#.....#...#......#...#',
+    '#..........#.............#..........#',
+    'g..........7......M......8..........g',
+    '#..........#.............#..........#',
+    '#...#......#...#.....#...#......#...#',
+    'w..........#.#.........#.#..........w',
+    '#..........#.............#.........R#',
+    '#####4############1###########5######',
+    '#..........#.............#..........#',
+    'w..........#.............#..........w',
+    '#...#......#.............#......#...#',
+    '#..........2...S.S.S.....3..........#',
+    'g..........#.............#..........g',
+    '#...X......#..S.S.S.S.S..#......X...#',
+    '#..........#C...........Y#..........#',
+    '###w#e##w#####w#p#s#w#g#####w##r#w###',
+  ],
+};
+
 export const ARENA_MAPS = {
-  aleatoria: { name: 'Aleatoria', procedural: true },
+  aleatoria:{ name: 'Aleatoria', procedural: true },
   coliseo: {
     name: 'Coliseo',
     rows: [

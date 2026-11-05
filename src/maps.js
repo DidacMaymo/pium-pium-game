@@ -1,7 +1,7 @@
 // Mapas: laberinto y arena aleatoria (deterministas a partir de una semilla) y mapas dibujados
 // en texto (mapdefs.js). Cada casilla tiene una altura: 0 = suelo, 0.7 = caja baja,
 // 1.5 = caja alta, WALL = pared, LAVA = lava (parkour). Además puede haber objetos móviles.
-import { ARENA_MAPS, TRAINING_MAP, PARKOUR_LEVELS } from './mapdefs.js';
+import { ARENA_MAPS, TRAINING_MAP, PARKOUR_LEVELS, ZOMBIE_MAP, ZOMBIE_LEGEND } from './mapdefs.js';
 
 export const TILE = 3; // metros por casilla
 export const WALL = Infinity;
@@ -242,6 +242,101 @@ export function buildArena(mapId, seed) {
 
 export function buildTraining(seed) {
   return buildFromRows(TRAINING_MAP, 'training', seed);
+}
+
+/**
+ * Mapa de zombis: el dibujo de ZOMBIE_MAP. Las puertas cerradas, las ventanas y los objetos
+ * bloquean el paso de los zombis (navBlocked); map.cells son solo las casillas alcanzables.
+ */
+export function buildZombies(seed) {
+  const def = ZOMBIE_MAP;
+  const { weapons, machines } = ZOMBIE_LEGEND;
+  const H = def.rows.length, W = def.rows[0].length;
+  const h = new Float32Array(W * H);
+  const at = (x, y) => y * W + x;
+  const map = {
+    kind: 'zombies', seed, W, H, h, exit: null, wallH: 4, ceiling: true, name: def.name,
+    spawns: [], barrels: [], movers: [], doors: [], windows: [], wallBuys: [], props: [],
+    navBlocked: new Set(), sightBlocked: new Set(),
+  };
+  let nb = 0;
+  for (let y = 0; y < H; y++) {
+    const row = def.rows[y];
+    if (row.length !== W) throw new Error(`Fila ${y} de ${row.length} casillas (deberían ser ${W})`);
+    for (let x = 0; x < W; x++) {
+      const ch = row[x];
+      const i = at(x, y);
+      if (ch === '#') h[i] = WALL;
+      else if (ch === 'S') map.spawns.push({ x, y });
+      else if (ch === 'X') map.barrels.push({ id: `x-${nb++}`, x, y });
+      else if (def.doors[ch] !== undefined) {
+        map.doors.push({ id: ch, x, y, cost: def.doors[ch] });
+        map.navBlocked.add(i);
+        map.sightBlocked.add(i);
+      } else if (ch === 'w' || ch === 'g') {
+        map.windows.push({ id: `w-${map.windows.length}`, x, y, tall: ch === 'g' });
+        map.navBlocked.add(i);
+        map.sightBlocked.add(i);
+      } else if (weapons[ch]) {
+        h[i] = WALL;
+        map.wallBuys.push({ id: `arma-${map.wallBuys.length}`, x, y, weapon: weapons[ch] });
+      } else if (ch === 'P' || ch === 'M' || ch === 'A' || ch === 'C' || machines[ch]) {
+        const kind = { P: 'power', M: 'box', A: 'ammo', C: 'carpenter' }[ch] ?? 'machine';
+        map.props.push({ kind, id: `${kind}-${map.props.length}`, x, y, item: machines[ch] });
+        map.navBlocked.add(i);
+      } else if (ch !== '.') throw new Error(`Carácter desconocido '${ch}' en (${x},${y})`);
+    }
+  }
+  const floor = (x, y) => x >= 0 && y >= 0 && x < W && y < H && h[at(x, y)] === 0 && !map.navBlocked.has(at(x, y));
+  const neighbours = (o) => DIRS.map(([dx, dy]) => ({ dx, dy })).filter(({ dx, dy }) => floor(o.x + dx, o.y + dy));
+  for (const w of map.windows) {
+    const n = neighbours(w)[0];
+    if (!n) throw new Error(`La ventana ${w.id} no da a ningún suelo`);
+    w.in = { x: w.x + n.dx, y: w.y + n.dy };
+  }
+  for (const b of map.wallBuys) {
+    const n = neighbours(b)[0];
+    if (!n) throw new Error(`El arma de pared en (${b.x},${b.y}) no da a ningún suelo`);
+    b.face = n;
+  }
+  for (const p of map.props) {
+    // mira hacia el lado contrario a la pared que tiene detrás
+    const wall = DIRS.find(([dx, dy]) => def.rows[p.y + dy]?.[p.x + dx] === '#');
+    p.face = wall ? { dx: -wall[0], dy: -wall[1] } : { dx: 0, dy: 1 };
+  }
+  map.barrelTiles = new Set(map.barrels.map((b) => at(b.x, b.y)));
+  const built = makeMap(map);
+  applyDoors(built, []);
+  return built;
+}
+
+/**
+ * Abre las puertas indicadas y recalcula map.cells: las casillas de suelo a las que se puede
+ * llegar desde el spawn. Los spawns, la reaparición y las ventanas activas dependen de eso.
+ */
+export function applyDoors(map, openIds) {
+  const { W, H } = map;
+  const open = new Set(openIds);
+  for (const d of map.doors) {
+    const i = d.y * W + d.x;
+    if (open.has(d.id)) { map.navBlocked.delete(i); map.sightBlocked.delete(i); }
+  }
+  const seen = new Uint8Array(W * H);
+  const q = [];
+  for (const s of map.spawns) { seen[s.y * W + s.x] = 1; q.push(s); }
+  map.cells = [];
+  for (let k = 0; k < q.length; k++) {
+    const { x, y } = q[k];
+    if (map.height(x, y) === 0 && !map.barrelTiles.has(y * W + x)) map.cells.push({ x, y });
+    for (const [dx, dy] of DIRS) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+      const i = ny * W + nx;
+      if (seen[i] || map.height(nx, ny) >= HIGH || map.navBlocked.has(i)) continue;
+      seen[i] = 1;
+      q.push({ x: nx, y: ny });
+    }
+  }
 }
 
 function parkourLegend(ch) {

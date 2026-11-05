@@ -8,22 +8,37 @@ Shooter láser en primera persona, de 1 a 8 jugadores (y bots). Cada ronda gener
 - **Arena**: todos contra todos. Gana el primero a 5, 10 o 20 bajas. Reapareces fuera de la vista de los rivales.
 - **Juego de armas**: cada baja te da el arma siguiente (pistola → subfusil → rifle → escopeta → francotirador → láser).
   Gana quien consiga una baja con la última.
-- **Zombis**: cooperativo por oleadas, cada vez más zombis, más rápidos y más duros. Perdéis si caéis todos a la vez.
+- **Zombis**: cooperativo por oleadas en un búnker enorme de 9 salas. Empiezas con pistola; todo lo demás se paga con puntos. Perdéis si caéis todos a la vez.
 - **Parkour**: carrera sobre lava con checkpoints y cronómetro. Solo contra el reloj (se guarda tu récord) o contra amigos.
 - **Entrenamiento**: 5 blancos (fijos, móviles y lejanos) para practicar con cada arma; mide precisión y tiempo por serie.
 
 **Bots** (Laberinto, Arena, Juego de armas): de 1 a 7, en Fácil, Normal o Difícil. Se puede jugar solo contra bots.
 
-**Armas**: pistola, subfusil, rifle, escopeta, francotirador (clic derecho para apuntar con mira) y láser.
+**Armas**: pistola, subfusil, rifle, escopeta, francotirador (clic derecho para apuntar con mira; es la que más daña), láser y,
+solo en la caja de zombis, la pistola de rayos.
 Vida 100, se regenera a los 4 s sin recibir daño, y los disparos a la cabeza hacen ×1,5.
+
+**Munición** (todos los modos): cada arma tiene cargador y una reserva finita. **R** recarga, y recarga sola al vaciar el cargador.
+Al reaparecer se rellena, y en el Juego de armas cada arma nueva llega llena. En zombis no: hay que comprarla.
 
 **Mapas de arena**: Coliseo, Torres, Pasillos y Aleatoria. Tienen pistones que te elevan, muros deslizantes
 y barriles explosivos (con reacción en cadena).
 
-**Zombis**: si caes, esperas a que tu equipo supere la oleada (o a que te revivan). Puntos: 10 por impacto,
-100 por zombi y 250 por oleada superada en pie. Con **B** abres la tienda: Botiquín, Revivir equipo,
-Segunda Vida, Puño de Hierro (el puñetazo con **V** revienta zombis), Refresco Blindado (200 de vida),
-Cola Doble Tiro y Pack-a-Pium (doble daño). Las mejoras se pierden al caer.
+**Zombis**: si caes, esperas a que tu equipo supere la oleada (o a que te revivan). Empiezas con 500 puntos y ganas 10 por impacto,
+100 por zombi, 250 por oleada superada en pie y 10 por tabla reparada. Todo se usa acercándote y pulsando **E**:
+- **Puertas**: abren salas nuevas (de 750 a 1500 puntos). Los zombis solo salen de las zonas abiertas.
+- **Armas en la pared**: las compras, y si ya la tienes compras munición a mitad de precio. Llevas 2 como máximo: la tercera sustituye a la de la mano.
+- **Caja misteriosa** (950, en el patio central): un arma al azar, incluida la pistola de rayos.
+- **Ventanas y puertas de servicio**: por ahí entran los zombis, tras romper las tablas. Mantén **E** para repararlas.
+- **Carpintero** (500, en la sala inicial): repara todas las ventanas del mapa.
+- **Munición** (1000, en el patio central): rellena todas tus armas.
+- **Electricidad** (gratis, en la sala del noroeste): hay que llegar hasta ella. Sin luz no funciona ninguna máquina.
+- **Máquinas** (mejoras fijas hasta que caes): Botiquín, Revivir equipo, Segunda Vida, Puño de Hierro (el puñetazo con **V** revienta zombis),
+  Refresco Blindado (200 de vida), Cola Doble Tiro, Recarga Exprés y Pack-a-Pium (doble daño).
+- **Power-ups en el suelo**: efectos momentáneos (turbo, ráfaga, gravedad lunar...). Ninguno regala armas.
+- **Zombi rojo**: cada 7 oleadas llega uno mucho más grande y resistente que muerde fuerte. Matarlo da 1000 puntos extra y munición llena a todo el equipo.
+
+Cada zombi lleva su vida encima, en barra y en número. No hay plataformas: los zombis pueden llegar a cualquier sitio.
 
 **Puñetazo (V)** en todos los modos con armas. En el Juego de armas, un puñetazo *humilla*: la víctima baja de nivel.
 
@@ -41,8 +56,8 @@ Cola Doble Tiro y Pack-a-Pium (doble daño). Las mejoras se pierden al caer.
 2. Los demás abren el enlace y pulsan **Unirse** (con el enlace solo ven el botón de unirse),
    o escriben el código en el menú principal. Se puede entrar a mitad de partida.
 3. El host pulsa **¡Empezar!**.
-4. Clic en la pantalla para capturar el ratón. WASD moverse, Espacio saltar, clic disparar, clic derecho apuntar,
-   1-6 o la rueda para cambiar de arma, Esc pausa, R otra ronda.
+4. Clic en la pantalla para capturar el ratón. WASD moverse, Espacio saltar, clic disparar, clic derecho apuntar, R recargar,
+   E usar (zombis), 1-6 o la rueda para cambiar de arma, Esc pausa. Al acabar, R otra ronda. En Entrenamiento, T reinicia.
 
 ## Desarrollo
 
@@ -73,14 +88,15 @@ npm run test:e2e
 | Fichero | Qué hace |
 | --- | --- |
 | `src/maps.js` | Laberinto y arena aleatoria con semilla, lector de mapas en texto, objetos móviles |
-| `src/mapdefs.js` | **Mapas dibujados en texto**: arenas, campo de tiro y niveles de parkour |
+| `src/mapdefs.js` | **Mapas dibujados en texto**: arenas, búnker zombi, campo de tiro y niveles de parkour |
 | `src/weapons.js` | Armas: daño, cadencia, dispersión, modelo 3D |
 | `src/bots.js` | IA de bots y zombis (camino más corto por la rejilla, puntería según dificultad) |
 | `src/spawn.js` | Spawns iniciales justos y reaparición fuera de la vista de los enemigos |
 | `src/game.js` | Escena Three.js, movimiento, saltos y colisiones, vida, disparos, power-ups, parkour, entrenamiento |
 | `src/powerups.js` | Tipos de power-up, iconos dibujados en canvas, modelo flotante |
 | `src/net.js` | Sala P2P con Trystero, acciones de red |
-| `src/shop.js` | Tienda zombi: precios y reglas de compra |
+| `src/shop.js` | Máquinas zombi: mejoras, precios y reglas de compra |
+| `src/zombieworld.js` | Mundo zombi: puertas, ventanas, caja, armas de pared, oleadas y zombi rojo (lógica pura) |
 | `src/util.js` | Códigos de sala, formato de tiempos |
 | `src/parkourCheck.js` | Comprueba con la física del juego que un nivel de parkour se puede superar |
 | `tests/unit/` | Tests unitarios (Vitest) |

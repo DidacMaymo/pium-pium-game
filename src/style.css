@@ -73,7 +73,7 @@ input.name { margin-bottom: 10px; text-align: center; }
 #health { position: absolute; left: 16px; bottom: 34px; display: flex; align-items: center; gap: 8px; font-weight: bold; font-size: 20px; text-shadow: 0 0 6px #000; }
 .hp-track { width: 180px; height: 10px; border-radius: 5px; background: #0008; border: 1px solid #fff4; overflow: hidden; }
 #hp-bar { height: 100%; width: 100%; transition: width .15s; }
-#weapons { position: absolute; right: 16px; bottom: 34px; text-align: right; font-size: 13px; line-height: 1.7; text-shadow: 0 0 6px #000; }
+#weapons { position: absolute; right: 16px; bottom: 72px; text-align: right; font-size: 13px; line-height: 1.7; text-shadow: 0 0 6px #000; }
 #weapons div { opacity: .45; }
 #weapons div.on { opacity: 1; color: #ffd23d; font-size: 17px; font-weight: bold; }
 #scope { position: absolute; inset: 0; background: radial-gradient(circle at center, transparent 0, transparent 34vmin, #000 34.5vmin); }
@@ -86,18 +86,22 @@ input.name { margin-bottom: 10px; text-align: center; }
 .small-btn { font-size: 13px; padding: 6px; border: none; }
 #wait-mode { color: #ff3df2; opacity: 1; }
 
-/* Tienda zombi y mejoras */
+/* Puntos y mejoras de zombis */
 #points { position: absolute; left: 16px; bottom: 62px; font-weight: bold; color: #ffd23d; text-shadow: 0 0 6px #000; }
 #perks { position: absolute; left: 16px; bottom: 88px; display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
 #perks span { color: #6fd13a; text-shadow: 0 0 6px #000; }
-#shop { position: fixed; inset: 0; display: flex; align-items: safe center; justify-content: center; background: rgba(6, 3, 12, .85); padding: 16px; overflow-y: auto; z-index: 5; }
-.shop-panel { background: #120a22; border: 2px solid #6fd13a; border-radius: 12px; padding: 20px; width: min(520px, 100%); }
-.shop-panel h2 { color: #6fd13a; margin-top: 0; }
-#shop-points { color: #ffd23d; font-size: 20px; font-weight: bold; }
-#shop-items { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-@media (max-width: 480px) { #shop-items { grid-template-columns: 1fr; } }
-.shop-item { margin: 0; text-align: left; background: #1d1430; color: #fff; border-color: #6fd13a; display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; }
-.shop-item b { grid-column: 1; }
-.shop-item small { grid-column: 1; opacity: .75; font-weight: normal; font-size: 12px; }
-.shop-item em { grid-column: 2; grid-row: 1 / 3; align-self: center; font-style: normal; color: #ffd23d; }
-.shop-item.off { opacity: .45; }
+
+/* Munición */
+#ammo { position: absolute; right: 16px; bottom: 30px; font-size: 30px; font-weight: bold; text-shadow: 0 0 6px #000; font-variant-numeric: tabular-nums; }
+#ammo small { font-size: 16px; opacity: .7; margin-left: 4px; }
+#ammo.low { color: #ff3d5a; }
+#ammo em { font-style: normal; font-size: 13px; color: #ffd23d; margin-right: 8px; }
+
+/* Aviso de lo que puedes usar */
+#prompt { position: absolute; top: 58%; left: 50%; transform: translateX(-50%); max-width: 90%; text-align: center; padding: 6px 14px; border-radius: 8px; background: #06030cb0; font-size: 16px; font-weight: bold; color: #ffd23d; }
+#prompt.off { color: #ff8a9c; }
+
+/* Zombi rojo */
+#boss { position: absolute; top: 42px; left: 50%; transform: translateX(-50%); width: min(460px, 70%); text-align: center; font-size: 14px; font-weight: bold; letter-spacing: 3px; color: #ff3d3d; text-shadow: 0 0 8px #000; }
+.boss-track { height: 14px; border-radius: 7px; background: #0009; border: 1px solid #ff3d3d; overflow: hidden; margin-top: 3px; }
+#boss-bar { height: 100%; width: 100%; background: #ff2020; transition: width .15s; }

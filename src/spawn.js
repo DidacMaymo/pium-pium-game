@@ -9,7 +9,8 @@ export function hasLOS(map, ax, az, bx, bz) {
   for (let i = 1; i < n; i++) {
     const x = ax + ((bx - ax) * i) / n;
     const z = az + ((bz - az) * i) / n;
-    if (map.height(Math.round(x / TILE), Math.round(z / TILE)) >= HIGH) return false;
+    const tx = Math.round(x / TILE), ty = Math.round(z / TILE);
+    if (map.height(tx, ty) >= HIGH || map.sightBlocked?.has(ty * map.W + tx)) return false;
   }
   return true;
 }

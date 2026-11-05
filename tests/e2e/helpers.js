@@ -37,6 +37,31 @@ export async function killZombies(page, n) {
   }
 }
 
+/**
+ * Zombis: coloca al jugador junto a un objeto del mapa. kind: door, window, wall, power, box, ammo,
+ * carpenter o machine; match: propiedades que debe tener (id, weapon, item).
+ */
+export async function standNextTo(page, kind, match = {}) {
+  await page.evaluate(({ kind, match }) => {
+    const g = window.__game;
+    const m = g.map;
+    const list = kind === 'door' ? m.doors : kind === 'window' ? m.windows : kind === 'wall' ? m.wallBuys : m.props.filter((p) => p.kind === kind);
+    const t = list.find((o) => Object.entries(match).every(([k, v]) => o[k] === v));
+    const free = (x, y) => m.height(x, y) === 0 && !m.navBlocked.has(y * m.W + x);
+    const [dx, dy] = [[0, 1], [0, -1], [1, 0], [-1, 0]].find(([a, b]) => free(t.x + a, t.y + b));
+    g.pos = { x: (t.x + dx) * 3, z: (t.y + dy) * 3 };
+  }, { kind, match });
+  await page.waitForTimeout(200); // deja que el aviso se actualice
+}
+
+/** Da puntos a un jugador (por defecto, a mí) y lo reparte a todos. Solo en el host. */
+export async function givePoints(page, points, id) {
+  await page.evaluate(({ points, id }) => {
+    window.__roster()[id ?? window.__selfId].points = points;
+    window.__sync();
+  }, { points, id });
+}
+
 export async function waitPlaying(page) {
   await page.waitForFunction(() => window.__game?.active && performance.now() > window.__game.frozenUntil, null, { timeout: 20_000 });
 }

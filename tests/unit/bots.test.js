@@ -77,6 +77,22 @@ describe('bots', () => {
     }
   });
 
+  it('también recargan: al vaciar el cargador dejan de disparar un rato', () => {
+    const map = buildArena('coliseo', 1);
+    const { bots } = setup(map);
+    const b = bots.addBot('bot-0', 'Bot', map.spawns[1], 'sniper');
+    expect(b.mag).toBe(5);
+    bots.setWeapon('bot-0', 'smg');
+    expect(b.mag).toBe(32);
+    b.mag = 1;
+    b.reactAt = 0;
+    const human = { id: 'h', x: b.x + 6, y: 0, z: b.z, alive: true, inv: false };
+    let now = 1000;
+    for (let i = 0; i < 60 && b.reloadAt === 0; i++) { now += 66; bots.update(0.066, now, [human]); }
+    expect(b.reloadAt).toBeGreaterThan(now);
+    expect(b.mag).toBe(32);
+  });
+
   it('en el laberinto buscan la salida', () => {
     const map = generateMaze(5, 6);
     const { bots, hooks } = setup(map, 'maze');
