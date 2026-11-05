@@ -1,6 +1,6 @@
 // Dos navegadores reales conectados por WebRTC (señalización por un relay local).
 import { test, expect } from '@playwright/test';
-import { openGame, hostAndJoin, expectNoErrors, game, killZombies } from './helpers.js';
+import { openGame, hostAndJoin, expectNoErrors, game, killZombies, standNextTo, givePoints } from './helpers.js';
 
 test('con enlace solo se ve "Unirse"', async ({ context }) => {
   const page = await openGame(context, '/#ab12c');
@@ -41,23 +41,49 @@ test('laberinto: el primero en salir gana para los dos', async ({ browser }) => 
   await s.close();
 });
 
-test('zombis en equipo: el invitado mata, gana puntos y compra', async ({ browser }) => {
-  const s = await hostAndJoin(browser, 'zombies', { '#sel-map': 'coliseo' });
+test('zombis en equipo: puntos, puertas, electricidad, armas y revivir', async ({ browser }) => {
+  const s = await hostAndJoin(browser, 'zombies');
   await killZombies(s.guest, 3);
-  await expect(s.guest.locator('#points')).toContainText('330 pts');
-  await s.guest.keyboard.press('KeyB');
-  await s.guest.locator('.shop-item', { hasText: 'Puño de Hierro' }).click().catch(() => {});
-  await s.guest.locator('.shop-item', { hasText: 'Botiquín' }).click();
-  await expect(s.guest.locator('#shop-points')).toHaveText('80 puntos');
+  await expect(s.guest.locator('#points')).toContainText('830 pts');
+  // el invitado abre una puerta y el host la ve abierta
+  await standNextTo(s.guest, 'door', { id: '1' });
+  await s.guest.keyboard.press('KeyE');
+  await expect.poll(() => game(s.host, () => window.__zw().doors)).toEqual(['1']);
+  await expect.poll(() => game(s.guest, () => window.__game.zw.doors)).toEqual(['1']);
+  await expect(s.guest.locator('#points')).toContainText('80 pts');
+  // el host da la luz y el invitado lo nota
+  await standNextTo(s.host, 'power');
+  await s.host.keyboard.press('KeyE');
+  await expect.poll(() => game(s.guest, () => window.__game.zw.power)).toBe(true);
+  // el invitado compra un arma: la paga en el host y le llega a él
+  await givePoints(s.host, 1000, s.ids.guest);
+  await standNextTo(s.guest, 'wall', { weapon: 'smg' });
+  await s.guest.keyboard.press('KeyE');
+  await expect.poll(() => game(s.guest, () => window.__game.currentWeapon)).toBe('smg');
+  expect(await game(s.host, (id) => window.__roster()[id].weapons, s.ids.guest)).toEqual(['pistol', 'smg']);
+  // ...y su máquina: la mejora le llega a él
+  await givePoints(s.host, 2000, s.ids.guest);
+  await standNextTo(s.guest, 'machine', { item: 'doubletap' });
+  await s.guest.keyboard.press('KeyE');
+  await expect.poll(() => game(s.guest, () => window.__game.perks.has('doubletap'))).toBe(true);
   // si el invitado cae, el host sigue vivo: no se acaba la partida
   await game(s.guest, () => window.__game.takeDamage(999, 'z-0', 'zombie'));
   await s.host.waitForTimeout(1500);
   expect(await game(s.host, () => window.__game.ended)).toBe(false);
-  // el host compra "Revivir equipo" (le damos puntos para la prueba) y el invitado se levanta
-  await game(s.host, () => { window.__roster()[window.__selfId].points = 5000; });
-  await s.host.keyboard.press('KeyB');
-  await s.host.locator('.shop-item', { hasText: 'Revivir equipo' }).click();
+  // el host usa la máquina de revivir y el invitado se levanta
+  await givePoints(s.host, 5000);
+  await standNextTo(s.host, 'machine', { item: 'revive' });
+  await s.host.keyboard.press('KeyE');
   await s.guest.waitForFunction(() => !window.__game.dead, null, { timeout: 5000 });
+  expectNoErrors(s.host, s.guest);
+  await s.close();
+});
+
+test('zombis en equipo: el invitado ve la vida de los zombis y las tablas', async ({ browser }) => {
+  const s = await hostAndJoin(browser, 'zombies');
+  await s.guest.waitForFunction(() => [...window.__game.avatars.values()].some((a) => a.kind === 'zombie' && a.maxHp > 0), null, { timeout: 30_000 });
+  // los zombis rompen tablas de una ventana y el invitado lo ve
+  await s.guest.waitForFunction(() => Object.values(window.__game.zw.planks).some((n) => n < 5), null, { timeout: 20_000 });
   expectNoErrors(s.host, s.guest);
   await s.close();
 });

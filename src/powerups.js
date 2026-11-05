@@ -20,7 +20,8 @@ export const MODE_POWERUPS = {
   maze: ['speed', 'hyper', 'jump', 'auto', 'sniper', 'moon', 'ghost'],
   arena: ['speed', 'hyper', 'jump', 'auto', 'sniper', 'medkit', 'moon', 'ghost'],
   gungame: ['speed', 'hyper', 'jump', 'medkit', 'moon', 'ghost'], // sin armas extra: rompería la progresión
-  zombies: ['speed', 'hyper', 'jump', 'auto', 'sniper', 'medkit', 'moon', 'ghost'],
+  // Efectos momentáneos en el suelo; lo permanente son las máquinas. Sin francotirador: las armas se compran.
+  zombies: ['speed', 'hyper', 'jump', 'auto', 'medkit', 'moon', 'ghost'],
 };
 
 /**

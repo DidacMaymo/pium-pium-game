@@ -20,7 +20,8 @@ const ACTIONS = [
   'boom',  // host -> todos: un barril explota
   'brl',   // host -> todos: barriles destruidos
   'wave',  // host -> todos: estado de la oleada zombi
-  'buy',   // -> host: compra en la tienda (zombis)
+  'use',   // -> host: usar algo del mapa zombi (puerta, máquina, caja, ventana...)
+  'zw',    // host -> todos: estado del mundo zombi
   'rev',   // host -> todos: revivir a los caídos
 ];
 

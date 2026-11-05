@@ -1,6 +1,6 @@
 // Cada modo arranca y funciona en solitario, sin errores.
 import { test, expect } from '@playwright/test';
-import { openGame, chooseMode, waitPlaying, fakePointerLock, expectNoErrors, game, killZombies } from './helpers.js';
+import { openGame, chooseMode, waitPlaying, fakePointerLock, expectNoErrors, game, killZombies, standNextTo, givePoints } from './helpers.js';
 
 test('el menú muestra los 6 modos', async ({ page }) => {
   await page.goto('/');
@@ -42,21 +42,227 @@ test('juego de armas: una baja sube de arma', async ({ context }) => {
   expectNoErrors(page);
 });
 
-test('zombis: llegan, muerden, dan puntos y la tienda vende', async ({ context }) => {
+/** Arranca una partida de zombis en solitario. */
+async function startZombies(context) {
   const page = await openGame(context);
-  await chooseMode(page, 'zombies', { '#sel-map': 'coliseo' });
+  await chooseMode(page, 'zombies');
   await page.click('#btn-solo');
   await waitPlaying(page);
-  // matar 3 zombis (tiros simulados a su id) -> 3 × (10 + 100) puntos
+  return page;
+}
+
+test('zombis: dan puntos y su vida se ve sobre la cabeza', async ({ context }) => {
+  const page = await startZombies(context);
+  await expect(page.locator('#opt-map')).toBeHidden(); // el mapa de zombis es uno solo
+  // 500 iniciales + 3 × (10 + 100)
   await killZombies(page, 3);
-  await expect(page.locator('#points')).toContainText('330 pts');
-  // tienda: comprar un botiquín (250)
-  await page.keyboard.press('KeyB');
-  await expect(page.locator('#shop')).toBeVisible();
-  await page.locator('.shop-item', { hasText: 'Botiquín' }).click();
-  await expect(page.locator('#shop-points')).toHaveText('80 puntos');
-  await page.keyboard.press('KeyB');
-  await expect(page.locator('#shop')).toBeHidden();
+  await expect(page.locator('#points')).toContainText('830 pts');
+  await page.waitForFunction(() => [...window.__game.avatars.values()].some((a) => a.kind === 'zombie'), null, { timeout: 30_000 });
+  const before = await game(page, () => {
+    const z = [...window.__game.avatars.values()].find((a) => a.kind === 'zombie');
+    window.__game.onEntityHit(z.id, 20, 'pistol');
+    return { id: z.id, hp: z.hp, full: z.hpFg.scale.x };
+  });
+  await expect.poll(() => game(page, (id) => window.__game.avatars.get(id)?.hp, before.id)).toBe(before.hp - 20);
+  expect(await game(page, (id) => window.__game.avatars.get(id).hpFg.scale.x, before.id)).toBeLessThan(before.full);
+  expectNoErrors(page);
+});
+
+test('zombis: empiezas con pistola y las armas se compran en la pared', async ({ context }) => {
+  const page = await startZombies(context);
+  expect(await game(page, () => window.__game.allowedWeapons())).toEqual(['pistol']);
+  await page.keyboard.press('Digit2');
+  expect(await game(page, () => window.__game.currentWeapon)).toBe('pistol');
+  // sin puntos suficientes no compra (empiezas con 500, el subfusil vale 800)
+  await standNextTo(page, 'wall', { weapon: 'smg' });
+  await expect(page.locator('#prompt')).toContainText('Comprar Subfusil');
+  await expect(page.locator('#prompt')).toContainText('Faltan puntos');
+  await page.keyboard.press('KeyE');
+  expect(await game(page, () => window.__game.currentWeapon)).toBe('pistol');
+  // con puntos, sí
+  await givePoints(page, 1000);
+  await page.keyboard.press('KeyE');
+  await expect.poll(() => game(page, () => window.__game.currentWeapon)).toBe('smg');
+  await expect(page.locator('#points')).toContainText('200 pts');
+  expect(await game(page, () => window.__game.allowedWeapons())).toEqual(['pistol', 'smg']);
+  // munición a mitad de precio, solo si te falta
+  await page.keyboard.press('KeyE');
+  await expect(page.locator('#points')).toContainText('200 pts');
+  await game(page, () => { window.__game.ammoOf('smg').reserve = 3; });
+  await givePoints(page, 400);
+  await page.keyboard.press('KeyE');
+  await expect(page.locator('#points')).toContainText('0 pts');
+  expect(await game(page, () => window.__game.ammoOf('smg').reserve)).toBe(256);
+  // la tercera arma sustituye a la que llevas en la mano
+  await givePoints(page, 1000);
+  await standNextTo(page, 'wall', { weapon: 'shotgun' });
+  await page.keyboard.press('KeyE');
+  await expect.poll(() => game(page, () => window.__game.allowedWeapons())).toEqual(['pistol', 'shotgun']);
+  expectNoErrors(page);
+});
+
+test('zombis: las puertas se abren con puntos y amplían el mapa', async ({ context }) => {
+  const page = await startZombies(context);
+  const before = await game(page, () => window.__game.map.cells.length);
+  await standNextTo(page, 'door', { id: '1' });
+  await givePoints(page, 750);
+  await page.keyboard.press('KeyE');
+  await expect.poll(() => game(page, () => window.__zw().doors)).toEqual(['1']);
+  await expect(page.locator('#points')).toContainText('0 pts');
+  expect(await game(page, () => window.__game.map.cells.length)).toBeGreaterThan(before);
+  // ya se puede cruzar: andar hacia la puerta no se queda bloqueado
+  const crossed = await game(page, () => {
+    const g = window.__game;
+    const d = g.map.doors.find((x) => x.id === '1');
+    return g.zBoxes.some((b) => b.cx === d.x * 3 && b.cz === d.y * 3);
+  });
+  expect(crossed).toBe(false);
+  expectNoErrors(page);
+});
+
+test('zombis: sin electricidad las máquinas no funcionan; con ella, mejora fija hasta caer', async ({ context }) => {
+  const page = await startZombies(context);
+  await givePoints(page, 5000);
+  await standNextTo(page, 'machine', { item: 'armor' });
+  await expect(page.locator('#prompt')).toContainText('Sin electricidad');
+  await page.keyboard.press('KeyE');
+  await page.waitForTimeout(200);
+  expect(await game(page, () => window.__game.perks.has('armor'))).toBe(false);
+  await standNextTo(page, 'power');
+  await page.keyboard.press('KeyE');
+  await expect.poll(() => game(page, () => window.__zw().power)).toBe(true);
+  await standNextTo(page, 'machine', { item: 'armor' });
+  await page.keyboard.press('KeyE');
+  await expect.poll(() => game(page, () => window.__game.perks.has('armor'))).toBe(true);
+  expect(await game(page, () => window.__game.maxHp)).toBe(200);
+  await expect(page.locator('#points')).toContainText('3000 pts');
+  expectNoErrors(page);
+});
+
+test('zombis: hay power-ups momentáneos en el suelo, ninguno de armas', async ({ context }) => {
+  const page = await startZombies(context);
+  const types = await game(page, () => [...window.__game.powerupMeshes.values()].map((p) => p.type));
+  expect(types.length).toBeGreaterThan(0);
+  expect(types).not.toContain('sniper');
+  expectNoErrors(page);
+});
+
+test('zombis: la caja misteriosa da un arma al azar', async ({ context }) => {
+  const page = await startZombies(context);
+  await givePoints(page, 1000);
+  await standNextTo(page, 'box');
+  await expect(page.locator('#prompt')).toContainText('Caja misteriosa');
+  await page.keyboard.press('KeyE');
+  await expect.poll(() => game(page, () => window.__zw().box.state)).toBe('spinning');
+  await expect(page.locator('#points')).toContainText('50 pts');
+  await page.waitForFunction(() => window.__zw().box.state === 'ready', null, { timeout: 5000 });
+  const weapon = await game(page, () => window.__zw().box.weapon);
+  await expect(page.locator('#prompt')).toContainText('Coger');
+  await page.keyboard.press('KeyE');
+  await expect.poll(() => game(page, () => window.__game.currentWeapon)).toBe(weapon);
+  expect(await game(page, () => window.__zw().box.state)).toBe('idle');
+  expectNoErrors(page);
+});
+
+test('zombis: entran por las ventanas; se reparan a mano o con el carpintero', async ({ context }) => {
+  const page = await startZombies(context);
+  // salen de una ventana y se quedan detrás de las tablas
+  await page.waitForFunction(() => [...window.__bots.bots.values()].some((z) => z.kind === 'zombie' && z.win &&
+    window.__game.map.windows.some((w) => w.x * 3 === z.x && w.y * 3 === z.z)), null, { timeout: 30_000 });
+  // reparar a mano da puntos
+  const id = await game(page, () => {
+    for (const z of window.__bots.bots.values()) window.__bots.remove(z.id);
+    Object.assign(window.__wave(), { toSpawn: 0, breakUntil: performance.now() + 60_000 });
+    const w = window.__game.map.windows.find((x) => x.y === 26);
+    window.__zw().planks[w.id] = 2;
+    window.__game.setZombieWorld(window.__zw());
+    return w.id;
+  });
+  await standNextTo(page, 'window', { id });
+  await givePoints(page, 0);
+  await page.keyboard.down('KeyE');
+  await expect.poll(() => game(page, (w) => window.__zw().planks[w], id), { timeout: 5000 }).toBe(5);
+  await page.keyboard.up('KeyE');
+  await expect(page.locator('#points')).toContainText('30 pts');
+  // el carpintero las arregla todas
+  await game(page, () => {
+    for (const k of Object.keys(window.__zw().planks)) window.__zw().planks[k] = 0;
+  });
+  await standNextTo(page, 'carpenter');
+  await givePoints(page, 500);
+  await expect(page.locator('#prompt')).toContainText('Carpintero');
+  await page.keyboard.press('KeyE');
+  await expect.poll(() => game(page, () => Object.values(window.__zw().planks).every((n) => n === 5))).toBe(true);
+  await expect(page.locator('#points')).toContainText('0 pts');
+  expectNoErrors(page);
+});
+
+test('zombis: en la oleada 7 llega el zombi rojo, y matarlo recarga la munición', async ({ context }) => {
+  const page = await startZombies(context);
+  await game(page, () => window.__startWave(7));
+  await page.waitForFunction(() => [...window.__game.avatars.values()].some((a) => a.boss), null, { timeout: 10_000 });
+  await expect(page.locator('#boss')).toBeVisible();
+  await expect(page.locator('#wave')).toContainText('ZOMBI ROJO');
+  const boss = await game(page, () => {
+    const a = [...window.__game.avatars.values()].find((x) => x.boss);
+    const normal = window.__bots.bots.get(a.id);
+    return { id: a.id, maxHp: normal.maxHp, y: a.body.scale.y };
+  });
+  expect(boss.maxHp).toBeGreaterThanOrEqual(2500);
+  expect(boss.y).toBeGreaterThan(1);
+  // medio muerto: la barra grande baja
+  await game(page, ({ id, maxHp }) => window.__game.onEntityHit(id, maxHp / 2, 'sniper'), boss);
+  await expect.poll(() => page.locator('#boss-bar').evaluate((el) => parseFloat(el.style.width))).toBeLessThan(60);
+  // matarlo: premio y munición
+  await game(page, () => { window.__game.ammoOf('pistol').reserve = 0; });
+  const pts = await game(page, () => window.__roster()[window.__selfId].points);
+  await game(page, ({ id, maxHp }) => window.__game.onEntityHit(id, maxHp, 'sniper'), boss);
+  await expect(page.locator('#boss')).toBeHidden();
+  expect(await game(page, () => window.__roster()[window.__selfId].points)).toBeGreaterThanOrEqual(pts + 1100);
+  expect(await game(page, () => window.__game.ammoOf('pistol').reserve)).toBe(96);
+  expectNoErrors(page);
+});
+
+for (const [mode, weapon] of [['arena', 'pistol'], ['maze', 'laser'], ['gungame', 'pistol'], ['zombies', 'pistol'], ['training', 'pistol']]) {
+  test(`munición en ${mode}: se gasta, se recarga y se acaba`, async ({ context }) => {
+    const page = await openGame(context);
+    await chooseMode(page, mode);
+    await page.click('#btn-solo');
+    await waitPlaying(page);
+    await fakePointerLock(page);
+    const { mag, reserve } = await game(page, (w) => window.__game.ammoOf(w), weapon);
+    await expect(page.locator('#ammo')).toContainText(`${mag}`);
+    await expect(page.locator('#ammo')).toContainText(`/ ${reserve}`);
+    // un disparo gasta una bala
+    await page.mouse.down();
+    await page.mouse.up();
+    expect(await game(page, (w) => window.__game.ammoOf(w).mag, weapon)).toBe(mag - 1);
+    // R recarga, tarda y coge de la reserva
+    await page.keyboard.press('KeyR');
+    await expect(page.locator('#ammo')).toContainText('RECARGANDO');
+    await page.waitForFunction(() => !window.__game.reloadUntil, null, { timeout: 5000 });
+    const after = await game(page, (w) => window.__game.ammoOf(w), weapon);
+    expect(after).toEqual({ mag, reserve: reserve - 1 });
+    // sin balas ni reserva no dispara
+    await game(page, (w) => { const a = window.__game.ammoOf(w); a.mag = 0; a.reserve = 0; window.__game.cooldown = 0; }, weapon);
+    await page.mouse.down();
+    await page.mouse.up();
+    await expect(page.locator('#toasts')).toContainText('SIN MUNICIÓN');
+    expectNoErrors(page);
+  });
+}
+
+test('munición: al vaciar el cargador recarga solo', async ({ context }) => {
+  const page = await openGame(context);
+  await chooseMode(page, 'training');
+  await page.click('#btn-solo');
+  await waitPlaying(page);
+  await fakePointerLock(page);
+  await game(page, () => { window.__game.ammoOf('pistol').mag = 1; });
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect(page.locator('#ammo')).toContainText('RECARGANDO');
+  await page.waitForFunction(() => window.__game.ammoOf('pistol').mag === 12, null, { timeout: 5000 });
   expectNoErrors(page);
 });
 

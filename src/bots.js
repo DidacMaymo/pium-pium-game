@@ -11,7 +11,9 @@ export const BOT_SKILL = {
 
 const BOT_NAMES = ['Paco', 'Manolo', 'Lola', 'Pepa', 'Chema', 'Rafa', 'Nuria', 'Fermín', 'Loli', 'Toñi'];
 const BOT_SPEED = 5;
-const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+const PLANK_TIME = 1; // segundos por tabla
+const PLANK_TIME_BOSS = 0.25;
+const DIRS =[[1, 0], [-1, 0], [0, 1], [0, -1]];
 
 export const botName = (i) => `Bot ${BOT_NAMES[i % BOT_NAMES.length]}`;
 
@@ -22,6 +24,8 @@ export class BotManager {
    *   died(victimId, killerId, weapon)        — un bot/zombi ha muerto
    *   shot(botId, from, ends, weapon)         — efecto visual de disparo
    *   reachedExit(botId)                      — laberinto
+   *   planks(windowId)                        — tablas que le quedan a una ventana (zombis)
+   *   tearPlank(windowId)                     — un zombi arranca una tabla
    * }
    */
   constructor(hooks) {
@@ -46,18 +50,27 @@ export class BotManager {
 
   addBot(id, name, spawnTile, weapon) {
     const b = this.#make(id, 'bot', name, spawnTile);
-    b.weapon = weapon ?? (this.mode === 'maze' ? 'laser' : LOADOUT[Math.floor(Math.random() * 5)]);
+    this.#arm(b, weapon ?? (this.mode === 'maze' ? 'laser' : LOADOUT[Math.floor(Math.random() * 5)]));
     this.bots.set(id, b);
     return b;
   }
 
-  addZombie(id, spawnTile, { hp, speed, dmg }) {
-    const z = this.#make(id, 'zombie', 'Zombi', spawnTile);
+  /** window: ventana por la que entra (se queda detrás hasta romper las tablas). */
+  addZombie(id, spawnTile, { hp, speed, dmg, boss = false, window = null }) {
+    const z = this.#make(id, 'zombie', boss ? 'Zombi Rojo' : 'Zombi', spawnTile);
     z.hp = z.maxHp = hp;
     z.speed = speed;
     z.dmg = dmg;
+    z.boss = boss;
+    z.win = window;
     this.bots.set(id, z);
     return z;
+  }
+
+  #arm(b, weapon) {
+    b.weapon = weapon;
+    b.mag = WEAPONS[weapon]?.mag ?? 12;
+    b.reloadAt = 0;
   }
 
   #make(id, kind, name, tile) {
@@ -66,12 +79,20 @@ export class BotManager {
       hp: MAX_HP, maxHp: MAX_HP, dead: false, deadUntil: 0, invUntil: 0, lastHurt: 0,
       weapon: 'pistol', cd: 0, path: [], pathAt: 0, target: null, reactAt: 0,
       strafe: Math.random() < 0.5 ? 1 : -1, strafeAt: 0, speed: BOT_SPEED, dmg: 0,
+      mag: 12, reloadAt: 0, boss: false, win: null,
     };
   }
 
-  setWeapon(id, weapon) { const b = this.bots.get(id); if (b) b.weapon = weapon; }
+  setWeapon(id, weapon) { const b = this.bots.get(id); if (b) this.#arm(b, weapon); }
   remove(id) { this.bots.delete(id); }
   get aliveZombies() { let n = 0; for (const b of this.bots.values()) if (b.kind === 'zombie' && !b.dead) n++; return n; }
+
+  /** Cuántos zombis siguen detrás de cada ventana: Map(windowId -> n). */
+  waitingAtWindows() {
+    const out = new Map();
+    for (const b of this.bots.values()) if (b.win) out.set(b.win.id, (out.get(b.win.id) ?? 0) + 1);
+    return out;
+  }
 
   /** Daño a un bot/zombi. Devuelve true si lo mata. */
   damage(id, dmg, byId, weapon, now = performance.now()) {
@@ -114,19 +135,55 @@ export class BotManager {
     this.#separate();
   }
 
+  /** Rompe las tablas de su ventana y salta dentro. Devuelve true mientras sigue en la ventana. */
+  #enterWindow(z, dt) {
+    const win = z.win;
+    z.yaw = Math.atan2(-(win.in.x - win.x), -(win.in.y - win.y));
+    if ((this.hooks.planks?.(win.id) ?? 0) > 0) {
+      z.cd -= dt;
+      if (z.cd <= 0) { z.cd = z.boss ? PLANK_TIME_BOSS : PLANK_TIME; this.hooks.tearPlank?.(win.id); }
+      return true;
+    }
+    // La ventana está bloqueada para la navegación normal: entra en línea recta hasta su casilla interior
+    const dx = win.in.x * TILE - z.x, dz = win.in.y * TILE - z.z;
+    const d = Math.hypot(dx, dz);
+    const step = z.speed * dt;
+    if (d <= step) {
+      z.x = win.in.x * TILE; z.z = win.in.y * TILE;
+      z.win = null;
+      z.cd = 0;
+      return false;
+    }
+    z.x += (dx / d) * step;
+    z.z += (dz / d) * step;
+    return true;
+  }
+
+  /** ¿Se puede andar en línea recta hasta el objetivo? (la casilla final puede ser una caja) */
+  #clearLine(a, b) {
+    const d = Math.hypot(b.x - a.x, b.z - a.z);
+    const n = Math.ceil(d / 0.4);
+    for (let i = 1; i < n; i++) {
+      const x = a.x + ((b.x - a.x) * i) / n, z = a.z + ((b.z - a.z) * i) / n;
+      if (!this.passable(Math.round(x / TILE), Math.round(z / TILE))) return false;
+    }
+    return true;
+  }
+
   #zombie(z, dt, now, everyone) {
+    if (z.win && this.#enterWindow(z, dt)) return;
     const targets = everyone.filter((e) => !e.isBot && e.alive && (!e.ghost || Math.hypot(e.x - z.x, e.z - z.z) < 6));
     if (!targets.length) return;
     const t = nearest(z, targets);
     const d = Math.hypot(t.x - z.x, t.z - z.z);
     z.yaw = Math.atan2(-(t.x - z.x), -(t.z - z.z));
-    if (d < 1.4) {
+    if (d < (z.boss ? 1.9 : 1.4)) {
       z.cd -= dt;
       if (z.cd <= 0) { z.cd = 1; this.hooks.hitPlayer(t.id, z.dmg, z.id, 'zombie'); }
       return;
     }
-    // en línea recta si lo ve, si no por el camino
-    if (d < 8 && hasLOS(this.map, z.x, z.z, t.x, t.z)) this.#moveDir(z, t.x - z.x, t.z - z.z, z.speed * dt);
+    // en línea recta si no hay nada en medio, si no por el camino
+    if (d < 8 && this.#clearLine(z, t)) this.#moveDir(z, t.x - z.x, t.z - z.z, z.speed * dt);
     else this.#follow(z, t, dt, now, z.speed, 600);
   }
 
@@ -172,9 +229,11 @@ export class BotManager {
     if (target) {
       b.yaw = Math.atan2(-(target.x - b.x), -(target.z - b.z));
       b.cd -= dt;
-      if (now >= b.reactAt && b.cd <= 0) {
+      if (now >= b.reactAt && now >= b.reloadAt && b.cd <= 0) {
         b.cd = w.cd * this.skill.cdMult * (w.auto ? 1 : 1.15);
         this.#fire(b, target, w);
+        // Los bots también recargan (su reserva no se acaba: si no, se quedarían quietos)
+        if (--b.mag <= 0) { b.mag = w.mag; b.reloadAt = now + w.reload * 1000; }
       }
     } else if (b.path.length) {
       const [nx, ny] = b.path[0];
@@ -279,11 +338,12 @@ export class BotManager {
     return path.reverse();
   }
 
-  /** Estado compacto para enviar por red: [id, kind, x, z, yaw, dead, inv, weapon] */
+  /** Estado compacto para enviar por red: [id, kind (0 bot, 1 zombi, 2 zombi rojo), x, z, yaw, dead, inv, weapon, hp, maxHp] */
   states(now = performance.now()) {
     return [...this.bots.values()].map((b) => [
-      b.id, b.kind === 'zombie' ? 1 : 0, +b.x.toFixed(2), +b.z.toFixed(2), +b.yaw.toFixed(2),
+      b.id, b.kind === 'zombie' ? (b.boss ? 2 : 1) : 0, +b.x.toFixed(2), +b.z.toFixed(2), +b.yaw.toFixed(2),
       b.dead ? 1 : 0, now < b.invUntil ? 1 : 0, b.kind === 'zombie' ? '' : b.weapon,
+      Math.max(0, Math.ceil(b.hp)), b.maxHp,
     ]);
   }
 }

@@ -262,3 +262,40 @@ function stopMusic() {
   clearInterval(timer);
   timer = null;
 }
+
+// ---------- Munición y mundo zombi ----------
+
+export function reloadSound() {
+  if (!ctx) return;
+  tone([220, 160, 300], 0.09, 'square', 0.12);
+}
+
+export function emptyClick() {
+  if (!ctx) return;
+  tone([900], 0.03, 'square', 0.1);
+}
+
+export function buySound() {
+  if (!ctx) return;
+  tone([520, 780], 0.07, 'triangle', 0.2);
+}
+
+export function doorSound() {
+  if (!ctx) return;
+  tone([110, 90, 70], 0.14, 'sawtooth', 0.22);
+}
+
+export function plankSound() {
+  if (!ctx) return;
+  tone([300, 240], 0.05, 'square', 0.14);
+}
+
+export function powerOnSound() {
+  if (!ctx) return;
+  tone([60, 90, 140, 220, 340, 520], 0.12, 'sawtooth', 0.22);
+}
+
+export function bossRoar() {
+  if (!ctx) return;
+  tone([95, 70, 55, 42], 0.3, 'sawtooth', 0.5);
+}
