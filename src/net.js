@@ -22,6 +22,7 @@ const ACTIONS = [
   'wave',  // host -> todos: estado de la oleada zombi
   'use',   // -> host: usar algo del mapa zombi (puerta, máquina, caja, ventana...)
   'zw',    // host -> todos: estado del mundo zombi
+  'gren',  // -> todos: alguien lanza una granada
   'rev',   // host -> todos: revivir a los caídos
 ];
 

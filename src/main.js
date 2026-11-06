@@ -10,10 +10,11 @@ import { BotManager, BOT_SKILL, botName } from './bots.js';
 import { initialSpawns } from './spawn.js';
 import { SHOP, POINTS, applyPurchase, losePerks } from './shop.js';
 import {
-  START_WEAPON, BOX_SPIN_MS, BOX_TAKE_MS, createZombieWorld, describeUse, findTarget, pickWindow, tearPlank, repairPlank,
+  START_WEAPON, GRENADES_PACK, BOX_SPIN_MS, BOX_TAKE_MS, createZombieWorld, describeUse, findTarget, pickWindow, tearPlank, repairPlank,
   repairAll, addWeapon, rollBox, isBossWave, waveSize, zombieStats, bossStats,
 } from './zombieworld.js';
 import { cleanCode, randomCode, fmtTime } from './util.js';
+import { Minimap } from './minimap.js';
 
 const $ = (id) => document.getElementById(id);
 const MAX_PLAYERS = 8;
@@ -43,10 +44,11 @@ function saveRecord(key, time) {
 const iconURLs = Object.fromEntries(POWERUP_TYPES.map((t) => [t, iconCanvas(t).toDataURL()]));
 
 const hud = {
+  minimap: new Minimap($('minimap')),
   overlay: (show) => ($('overlay').hidden = !show),
   message(main, sub = '') { $('msg-main').textContent = main; $('msg-sub').textContent = sub; },
   dead: (on) => $('dead').classList.toggle('on', on),
-  deadCountdown: (n) => ($('dead-count').textContent = n == null ? 'Espera a que tu equipo supere la oleada' : Math.max(0, n)),
+  deadCountdown: (n) => ($('dead-count').textContent = n == null ? 'Espera a que te revivan o a que tu equipo supere la oleada' : Math.max(0, n)),
   paused: (on) => ($('pause').hidden = !on),
   hitmarker(hs) {
     const el = $('hitmarker');
@@ -108,6 +110,10 @@ const hud = {
   points(n) {
     $('points').hidden = n == null;
     if (n != null) $('points').textContent = `${n} pts`;
+  },
+  grenades(n) {
+    $('grenades').hidden = n == null;
+    if (n != null) $('grenades').textContent = `${n} granadas (G)`;
   },
   ammo(a) {
     const el = $('ammo');
@@ -233,6 +239,7 @@ let puSeq = 0;
 const timers = [];
 let joinTimeout = null;
 let waveInfo = { n: 0 };
+let choosingMode = false; // el host está eligiendo modo al acabar una ronda
 let zw = null; // mundo zombi (autoridad: host): puertas, electricidad, tablas, caja
 
 const newSeed = () => (Math.random() * 2 ** 32) >>> 0;
@@ -315,10 +322,44 @@ function syncLobbyVisibility() {
   $('opt-level').hidden = mode !== 'parkour';
   $('opt-bots').hidden = !info.bots;
   $('opt-skill').hidden = !info.bots || $('sel-bots').value === '0';
-  $('btn-create').hidden = !info.online;
-  $('join-row').hidden = !info.online;
+  // Unirse no depende del modo seleccionado: es el host quien lo elige
+  $('btn-create').hidden = !info.online || choosingMode;
+  $('join-row').hidden = choosingMode;
+  $('solo-row').hidden = choosingMode;
+  $('btn-room-start').hidden = !choosingMode;
+  $('btn-room-back').hidden = !choosingMode;
   $('btn-solo').textContent = mode === 'training' ? '¡A entrenar!' : info.bots && $('sel-bots').value !== '0' ? 'Jugar contra bots' : 'Practicar solo';
 }
+
+// Cambiar de modo al acabar una ronda, sin salir de la sala
+function openModePicker() {
+  if (!isHostLike() || !roundOver || !game.active || choosingMode) return;
+  choosingMode = true;
+  for (const label of $('modes').children) {
+    const input = label.querySelector('input');
+    const blocked = role === 'host' && !MODE_INFO[input.value].online;
+    label.hidden = blocked;
+    if (blocked && input.checked) document.querySelector('input[name=mode][value=maze]').checked = true;
+  }
+  syncLobbyVisibility();
+  $('lobby').hidden = false;
+  $('join-only').hidden = true;
+  $('waiting').hidden = true;
+  hud.overlay(true);
+  if (document.pointerLockElement) document.exitPointerLock();
+}
+
+function closeModePicker() {
+  if (!choosingMode) return;
+  choosingMode = false;
+  for (const label of $('modes').children) label.hidden = false;
+  syncLobbyVisibility();
+  hud.overlay(false);
+}
+
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'KeyM' && !e.repeat && game.ended && game.active && isHostLike()) openModePicker();
+});
 
 function showLobby() {
   $('lobby').hidden = false;
@@ -429,6 +470,7 @@ function startPayload(order) {
 }
 
 function hostStartRound() {
+  closeModePicker();
   currentSeed = newSeed();
   roundOver = false;
   clearTimers();
@@ -526,7 +568,7 @@ function hostDied(victimId, killerId, w, revivingSoon = false) {
 }
 
 function announceKill(killerId, victimId, w) {
-  const wname = w === 'barrel' ? 'Barril' : w === 'zombie' ? 'Mordisco' : w === 'punch' ? 'Puñetazo' : WEAPONS[w]?.name ?? '';
+  const wname = w === 'barrel' ? 'Barril' : w === 'grenade' ? 'Granada' : w === 'zombie' ? 'Mordisco' : w === 'punch' ? 'Puñetazo' : WEAPONS[w]?.name ?? '';
   hud.feed([[nameOf(killerId), colorOf(killerId)], [` [${wname}] `], [nameOf(victimId), colorOf(victimId)]]);
 }
 
@@ -649,8 +691,9 @@ function tell(who, msg) {
   else send('got', { r: currentSeed, ...msg }, who);
 }
 
-function applyGot({ type, perk, fail, give, refill }) {
+function applyGot({ type, perk, fail, give, refill, nades }) {
   if (fail) hud.toast(fail, '#ff3d5a');
+  else if (nades) game.addGrenades(nades);
   else if (give) game.giveWeapon(give);
   else if (refill) { game.refillAmmo(); hud.toast('¡MUNICIÓN LLENA!', '#3dff7a'); }
   else if (perk) game.applyPerk(perk);
@@ -687,10 +730,24 @@ function hostOpenBox(who) {
   });
 }
 
+/** Un compañero ha levantado a otro manteniendo E: el caído sigue donde estaba. */
+function hostReviveAlly(who, id) {
+  const humans = game.humans(selfId);
+  const rescuer = humans.find((h) => h.id === who);
+  const downed = humans.find((h) => h.id === id);
+  if (!rescuer?.alive || !downed || downed.alive) return;
+  if (id === selfId) game.revive(true);
+  else send('rev', { r: currentSeed, here: 1 }, id);
+  roster[who].points += POINTS.revive;
+  hud.feed([[nameOf(who), colorOf(who)], [' ha levantado a '], [nameOf(id), colorOf(id)]]);
+  broadcastRoster();
+}
+
 /** Un jugador usa algo del mapa. El host valida con la misma lógica que le enseña el aviso. */
 function hostUse(who, { kind, id, cur }) {
   if (roundOver || config.mode !== 'zombies' || !zw) return;
   const p = roster[who];
+  if (kind === 'ally') { hostReviveAlly(who, id); return; }
   const target = findTarget(game.map, kind, id);
   if (!p || !target) return;
   const alive = !!game.humans(selfId).find((h) => h.id === who)?.alive;
@@ -710,6 +767,8 @@ function hostUse(who, { kind, id, cur }) {
     hostGive(who, target.weapon, cur);
   } else if (kind === 'ammo') {
     tell(who, { refill: 1 });
+  } else if (kind === 'grenades') {
+    tell(who, { nades: GRENADES_PACK });
   } else if (kind === 'carpenter') {
     repairAll(zw);
     hud.feed([[nameOf(who), colorOf(who)], [' ha llamado al carpintero']]);
@@ -799,7 +858,7 @@ function zombieTick(now) {
 
 function showEnd(winnerId, extra = {}) {
   const iWon = winnerId === selfId;
-  const rematch = isHostLike() ? 'Pulsa R para otra ronda' : 'Pulsa R para pedir otra ronda';
+  const rematch = isHostLike() ? 'R otra ronda · M cambiar de modo' : 'Pulsa R para pedir otra ronda · el host puede cambiar de modo';
   let title;
   if (config.mode === 'zombies') {
     title = `Os han comido en la oleada ${extra.zombies ?? waveInfo.n}`;
@@ -935,9 +994,10 @@ function connect(code) {
     zw({ r, zw: state }, from) {
       if (from === hostId && r === currentSeed) game.setZombieWorld(state);
     },
-    rev({ r }, from) {
-      if (from === hostId && r === currentSeed) game.revive();
+    rev({ r, here }, from) {
+      if (from === hostId && r === currentSeed) game.revive(!!here);
     },
+    gren: (data) => game.remoteGrenade(data),
     exit({ r, t }, from) {
       if (role === 'host' && r === currentSeed && (config.mode === 'maze' || config.mode === 'parkour')) hostEnd(from, { time: t });
     },
@@ -962,6 +1022,7 @@ function connect(code) {
     st: (d) => net.send.st(d),
     shot: (d) => net.send.shot(d),
     hit: (d, target) => net.send.hit(d, target),
+    gren: (d) => net.send.gren(d),
   };
 }
 
@@ -1004,9 +1065,15 @@ function join(raw) {
 }
 
 $('btn-join').onclick = () => join($('input-code').value);
-$('input-code').onkeydown = (e) => e.key === 'Enter' && join($('input-code').value);
+// Ojo: un manejador on... que devuelve false cancela la tecla (no se podría escribir). Usa siempre llaves.
+const onEnter = (id, fn) => { $(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') fn(); }); };
+onEnter('input-code', () => join($('input-code').value));
 $('btn-join-only').onclick = () => join($('join-code-label').textContent);
-$('input-name-join').onkeydown = (e) => e.key === 'Enter' && join($('join-code-label').textContent);
+onEnter('input-name-join', () => join($('join-code-label').textContent));
+$('btn-join-other').onclick = () => join($('input-code-other').value);
+onEnter('input-code-other', () => join($('input-code-other').value));
+$('btn-room-start').onclick = () => { readLobby(); hostStartRound(); };
+$('btn-room-back').onclick = () => { closeModePicker(); game.lock(); };
 $('btn-own-game').onclick = () => { history.replaceState(null, '', location.pathname); showLobby(); };
 
 $('btn-solo').onclick = () => {

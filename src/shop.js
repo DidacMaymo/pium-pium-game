@@ -1,7 +1,7 @@
 // Máquinas del modo Zombis: puntos por impacto/baja y mejoras. Lógica pura (sin DOM) para poder testearla.
 // La autoridad es el host: valida y descuenta; el comprador aplica el efecto en su juego.
 
-export const POINTS = { start: 500, hit: 10, kill: 100, wave: 250, repair: 10, boss: 1000 };
+export const POINTS = { start: 500, hit: 10, kill: 100, wave: 250, repair: 10, boss: 1000, revive: 100 };
 
 /** Cada entrada es una máquina del mapa. Todas necesitan electricidad. */
 export const SHOP = {

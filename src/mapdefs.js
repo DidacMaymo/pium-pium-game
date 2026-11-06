@@ -10,13 +10,15 @@
 //   S  salida           F  meta            a-i  checkpoint de altura 1-9
 //   E  pistón           M / N  plataforma móvil (eje X / Z) a altura `moverH`
 //   J  power-up doble salto   Z  power-up hipervelocidad   (en plataforma de altura `puH`)
+//   #  pared (niveles dentro de edificios: con `wallH` el nivel tiene techo a esa altura en metros;
+//      `startYaw` es hacia dónde miras al salir: 0 arriba, Math.PI / 2 izquierda, -Math.PI / 2 derecha)
 
 // ZOMBIS (ver ZOMBIE_MAP; sin cajas: los zombis deben poder llegar a cualquier sitio)
 //   #  pared o pilar    .  suelo   S  spawn   X  barril
 //   1-9, D  puerta (precio en `doors`)
 //   w  ventana con tablas   g  puerta de servicio con tablas (por ahí entran los zombis)
 //   p s r e f l  arma en la pared: pistola, subfusil, rifle, escopeta, francotirador, láser
-//   P  electricidad   M  caja misteriosa   A  munición   C  carpintero
+//   P  electricidad   M  caja misteriosa   A  munición   C  carpintero   G  granadas
 //   J T Q V H K R Y  máquinas (ver ZOMBIE_LEGEND.machines)
 
 export const ZOMBIE_LEGEND = {
@@ -53,7 +55,7 @@ export const ZOMBIE_MAP = {
     '#..........2...S.S.S.....3..........#',
     'g..........#.............#..........g',
     '#...X......#..S.S.S.S.S..#......X...#',
-    '#..........#C...........Y#..........#',
+    '#..........#C..........GY#..........#',
     '###w#e##w#####w#p#s#w#g#####w##r#w###',
   ],
 };
@@ -229,6 +231,61 @@ export const PARKOUR_LEVELS = [
       '         ',
       '    S    ',
       '         ',
+    ],
+  },
+  {
+    name: '4 · Almacén (edificio)',
+    startH: 1, finishH: 8, moverH: 4, puH: 2, pistonMax: 3.5, wallH: 7.5, startYaw: -Math.PI / 2,
+    rows: [
+      '#############',
+      '###########F#',
+      '#5 5 E 77 78#',
+      '#e###########',
+      '#44 M 4 43 3#',
+      '###########c#',
+      '#S 1 12 2 23#',
+      '#############',
+    ],
+  },
+  {
+    name: '5 · Torre de oficinas (edificio)',
+    startH: 1, finishH: 8, moverH: 4, puH: 2, pistonMax: 3.5, wallH: 7.5, startYaw: Math.PI / 2,
+    rows: [
+      '###########',
+      '# 4 45 E 6#',
+      '#4       6#',
+      '#3 #####  #',
+      '#  ##### 6#',
+      '#c ##### f#',
+      '#2 #####  #',
+      '#  ##### 6#',
+      '#2       7#',
+      '# 21 S F7 #',
+      '###########',
+    ],
+  },
+  {
+    name: '6 · Hospital (edificio, difícil)',
+    startH: 1, finishH: 5, moverH: 4, puH: 2, wallH: 8, startYaw: Math.PI / 2,
+    rows: [
+      '#############',
+      '#6 Z  23 34F#',
+      '#f###########',
+      '#65 5 5     #',
+      '######e######',
+      '#     J1 1 S#',
+      '#############',
+    ],
+  },
+  {
+    name: '7 · Sótano (edificio, difícil)',
+    startH: 2, finishH: 7, moverH: 2, puH: 2, pistonMax: 3, wallH: 6.5, startYaw: -Math.PI / 2,
+    rows: [
+      '###############',
+      '#F 76 E 54 E 3#',
+      '#############c#',
+      '#S 2  M  23 33#',
+      '###############',
     ],
   },
 ];

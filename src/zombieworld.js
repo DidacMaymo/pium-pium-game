@@ -6,6 +6,8 @@ import { SHOP, canBuy } from './shop.js';
 export const MAX_PLANKS = 5;
 export const AMMO_COST = 1000;
 export const CARPENTER_COST = 500;
+export const GRENADES_COST = 500;
+export const GRENADES_PACK = 2;
 export const BOX_COST = 950;
 export const BOX_SPIN_MS = 2600;
 export const BOX_TAKE_MS = 9000;
@@ -147,6 +149,10 @@ export function describeUse(target, { zw, player, who, alive = true, anyDead = f
     }
     case 'ammo':
       return paid('Munición para todas tus armas', AMMO_COST);
+    case 'grenades':
+      return paid(`${GRENADES_PACK} granadas`, GRENADES_COST);
+    case 'ally':
+      return { text: `Mantén E para revivir a ${target.name || 'tu compañero'}`, cost: 0, ok: true, reason: null };
     case 'wall': {
       const w = WEAPONS[target.weapon];
       const price = WALL_PRICES[target.weapon];

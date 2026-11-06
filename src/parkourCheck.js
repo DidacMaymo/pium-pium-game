@@ -1,6 +1,6 @@
 // Comprueba si un nivel de parkour se puede completar con la física del juego.
 // Lo usan los tests y `npm run check-parkour`. Las constantes deben coincidir con game.js.
-import { TILE, LAVA } from './maps.js';
+import { TILE, LAVA, WALL } from './maps.js';
 
 export const PHYSICS = { gravity: 20, jumpV: 6.2, speed: 5.5, radius: 0.35 };
 const SIZE = TILE * 0.96;
@@ -17,6 +17,16 @@ function landTime(dh, dbl) {
   return d < 0 ? null : V / G + (V + Math.sqrt(d)) / G;
 }
 
+/** ¿Hay una pared entre dos puntos? (solo en niveles dentro de edificios) */
+function wallBetween(map, a, b) {
+  const n = Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / 0.5);
+  for (let i = 1; i < n; i++) {
+    const x = a.x + ((b.x - a.x) * i) / n, z = a.z + ((b.z - a.z) * i) / n;
+    if (map.height(Math.round(x / TILE), Math.round(z / TILE)) === WALL) return true;
+  }
+  return false;
+}
+
 function reach(dh, power) {
   const t = landTime(dh, power.includes('jump'));
   const spd = power.includes('hyper') ? PHYSICS.speed * 2 : PHYSICS.speed;
@@ -28,7 +38,7 @@ export function checkParkour(map) {
   const nodes = [];
   for (let y = 0; y < map.H; y++) for (let x = 0; x < map.W; x++) {
     const h = map.height(x, y);
-    if (h > LAVA) nodes.push({ x: x * TILE, z: y * TILE, hmin: h, hmax: h, tag: `${x},${y}` });
+    if (h > LAVA && h !== WALL) nodes.push({ x: x * TILE, z: y * TILE, hmin: h, hmax: h, tag: `${x},${y}` });
   }
   for (const mv of map.movers) {
     if (mv.type === 'piston') nodes.push({ x: mv.x * TILE, z: mv.y * TILE, hmin: mv.h0, hmax: mv.h1, tag: `piston ${mv.x},${mv.y}` });
@@ -58,7 +68,7 @@ export function checkParkour(map) {
       if (j === i) continue;
       const b = nodes[j];
       let can = a.mover && a.mover === b.mover; // un móvil te lleva de un extremo a otro
-      if (!can) {
+      if (!can && !wallBetween(map, a, b)) {
         const gx = Math.max(0, Math.abs(a.x - b.x) - SIZE), gz = Math.max(0, Math.abs(a.z - b.z) - SIZE);
         const gap = Math.max(0, Math.hypot(gx, gz) - 2 * R);
         for (const ha of [a.hmin, a.hmax]) for (const hb of [b.hmin, b.hmax]) {

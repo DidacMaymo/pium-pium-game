@@ -13,6 +13,7 @@
     <div id="hurt"></div>
     <div id="scope" hidden><div class="scope-ring"></div></div>
     <div id="score"></div>
+    <canvas id="minimap" hidden></canvas>
     <div id="feed"></div>
     <div id="wave" hidden></div>
     <div id="timer" hidden></div>
@@ -28,9 +29,10 @@
     <div id="prompt" hidden></div>
     <div id="boss" hidden><span>ZOMBI ROJO</span><div class="boss-track"><div id="boss-bar"></div></div></div>
     <div id="points" hidden></div>
+    <div id="grenades" hidden></div>
     <div id="perks"></div>
     <div id="dead"><div>TE HAN FRITO</div><div id="dead-count">3</div></div>
-    <div id="help">WASD moverse · Espacio saltar · Clic disparar · Clic dcho. apuntar · R recargar · E usar · V puñetazo · 1-6 / rueda armas · Esc pausa</div>
+    <div id="help">WASD moverse · Espacio saltar · Clic disparar · Clic dcho. apuntar · R recargar · E usar · G granada · V puñetazo · 1-6 / rueda armas · Esc pausa</div>
   </div>
 
   <div id="pause" hidden>
@@ -83,7 +85,9 @@
           <input id="input-code" maxlength="80" placeholder="CÓDIGO O ENLACE" autocomplete="off" class="code-in" />
           <button id="btn-join">Unirse</button>
         </div>
-        <div class="row">
+        <button id="btn-room-start" hidden>¡Empezar este modo!</button>
+        <button id="btn-room-back" class="ghost" hidden>Volver</button>
+        <div class="row" id="solo-row">
           <button id="btn-solo" class="ghost">Practicar solo</button>
           <button id="btn-settings" class="ghost">⚙ Ajustes</button>
         </div>
@@ -94,6 +98,11 @@
         <p class="code" id="join-code-label"></p>
         <input id="input-name-join" maxlength="14" placeholder="Tu nombre" autocomplete="off" class="name" />
         <button id="btn-join-only">Unirse</button>
+        <p class="small">¿Te han pasado otro código?</p>
+        <div class="row">
+          <input id="input-code-other" maxlength="80" placeholder="CÓDIGO O ENLACE" autocomplete="off" class="code-in" />
+          <button id="btn-join-other" class="auto-w">Unirse</button>
+        </div>
         <button id="btn-own-game" class="ghost small-btn">o crear mi propia partida</button>
       </div>
 

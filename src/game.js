@@ -4,7 +4,9 @@ import {
 } from './maps.js';
 import { MAX_PLANKS, START_WEAPON, BOX_WEIGHTS, WALL_PRICES, createZombieWorld, describeUse, addWeapon } from './zombieworld.js';
 import { SHOP } from './shop.js';
-import { initialSpawns, pickRespawn } from './spawn.js';
+import { createMouseFilter } from './input.js';
+import { GRENADE, launchGrenade, stepGrenade, grenadeDamage } from './grenades.js';
+import { initialSpawns, pickRespawn, hasLOS } from './spawn.js';
 import { POWERUPS, makePowerupMesh, animatePowerup } from './powerups.js';
 import { WEAPONS, LOADOUT, MAX_HP, HEADSHOT, makeGunModel, disposeGroup } from './weapons.js';
 import * as sfx from './audio.js';
@@ -28,14 +30,15 @@ const SECOND_LIFE_MS = 3000;
 const REPAIR_MS = 600; // una tabla cada 0,6 s mientras mantienes E
 const USE_RANGE = 3.4; // metros hasta el centro de la casilla del objeto (la casilla de al lado está a 3; al otro lado de una pared, a 6)
 const BAR_W = 1.2;
+const REVIVE_MS = 2500; // manteniendo E junto a un compañero caído
 
 /** Reglas por modo: tiempo muerto, invulnerabilidad al reaparecer y armas disponibles. */
 export const RULES = {
   maze: { deathMs: 3000, invulnMs: 0, weapons: ['laser'] },
-  arena: { deathMs: 2000, invulnMs: 1500, weapons: LOADOUT },
+  arena: { deathMs: 2000, invulnMs: 1500, weapons: LOADOUT, grenades: 2 },
   gungame: { deathMs: 2000, invulnMs: 1500, weapons: null }, // el arma la marca tu nivel
   // caído hasta superar la oleada (o que te revivan); empiezas con pistola y el resto se compra
-  zombies: { deathMs: Infinity, invulnMs: 2000, weapons: [START_WEAPON], keepAmmo: true },
+  zombies: { deathMs: Infinity, invulnMs: 2000, weapons: [START_WEAPON], keepAmmo: true, grenades: 2 },
   training: { deathMs: 0, invulnMs: 0, weapons: LOADOUT },
   parkour: { deathMs: 0, invulnMs: 0, weapons: [] },
 };
@@ -136,6 +139,11 @@ export class Game {
     this.reloadUntil = 0;
     this.zw = null;
     this.z = null; // objetos 3D del mapa zombi
+    this.minimap = hud.minimap ?? null;
+    this.mouseFilter = createMouseFilter();
+    this.grenades = [];
+    this.nades = 0;
+    this.reviveMs = 0;
 
     this.#bindInput();
     window.addEventListener('resize', () => this.#resize());
@@ -375,6 +383,11 @@ export class Game {
     this.repairAt = 0;
     this.hud.boss(null);
     this.hud.prompt(null);
+    this.reviveMs = 0;
+    this.#clearGrenades();
+    this.nades = this.rules.grenades ?? 0;
+    this.hud.grenades(this.rules.grenades ? this.nades : null);
+    this.minimap?.start(this.map, mode);
     this.selectWeapon(this.rules.weapons?.[0] ?? (mode === 'gungame' ? 'pistol' : null));
     this.#ammoHud();
     if (mode === 'training') this.#resetTraining();
@@ -412,6 +425,9 @@ export class Game {
     this.hud.ammo(null);
     this.hud.prompt(null);
     this.hud.boss(null);
+    this.hud.grenades(null);
+    this.minimap?.stop();
+    this.#clearGrenades();
     if (document.pointerLockElement === this.canvas) document.exitPointerLock();
   }
 
@@ -567,6 +583,7 @@ export class Game {
     const color = av ? av.color : PALETTE[1];
     const va = new THREE.Vector3(...from);
     for (const end of ends) this.#spawnBeam(va, new THREE.Vector3(...end), color, WEAPONS[w]?.width ?? 0.035);
+    this.minimap?.shot(va.x, va.z);
     const d = va.distanceTo(this.camera.position);
     sfx.laser(Math.max(0, 1 - d / 45) * 0.8, (WEAPONS[w]?.pitch ?? 1) * 0.9);
   }
@@ -612,9 +629,84 @@ export class Game {
   }
 
   /** El host revive a todos (zombis: nueva oleada). */
-  revive() {
+  revive(here = false) {
     if (!this.dead || this.ended) return;
+    if (here) this.reviving = true; // te levanta un compañero: sigues donde caíste
     this.deadUntil = performance.now();
+  }
+
+  // ---------- Granadas ----------
+
+  addGrenades(n) {
+    this.nades = Math.min(GRENADE.max, this.nades + n);
+    this.hud.grenades(this.nades);
+    sfx.buySound();
+  }
+
+  #throwGrenade() {
+    if (!this.alive || this.ended || performance.now() < this.frozenUntil) return;
+    if (this.nades <= 0) { if (this.rules.grenades) this.hud.toast('Sin granadas', '#ff3d5a'); return; }
+    this.nades--;
+    this.hud.grenades(this.nades);
+    this.punchAnim = 1;
+    sfx.punch();
+    this.camera.updateMatrixWorld();
+    const dir = new THREE.Vector3();
+    this.camera.getWorldDirection(dir);
+    const pos = this.camera.position.clone().addScaledVector(dir, 0.4);
+    const data = { r: this.seed, a: pos.toArray(), d: dir.toArray() };
+    this.#addGrenade(data, true);
+    if (!this.solo) this.net?.gren(data);
+  }
+
+  remoteGrenade(data) {
+    if (data.r === this.seed) this.#addGrenade(data, false);
+  }
+
+  #addGrenade({ a, d }, mine) {
+    const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.14, 10, 8), new THREE.MeshStandardMaterial({ color: 0x35602a, emissive: 0xff2020, emissiveIntensity: 0.3 }));
+    this.scene.add(mesh);
+    this.grenades.push({ g: launchGrenade(a, d), mesh, mine });
+  }
+
+  #clearGrenades() {
+    for (const n of this.grenades) { this.scene.remove(n.mesh); n.mesh.geometry.dispose(); n.mesh.material.dispose(); }
+    this.grenades = [];
+  }
+
+  #updateGrenades(dt) {
+    for (let i = this.grenades.length - 1; i >= 0; i--) {
+      const n = this.grenades[i];
+      const boom = stepGrenade(this.map, n.g, dt);
+      n.mesh.position.set(n.g.x, n.g.y, n.g.z);
+      if (!boom) continue;
+      this.scene.remove(n.mesh);
+      n.mesh.geometry.dispose();
+      n.mesh.material.dispose();
+      this.grenades.splice(i, 1);
+      this.#blastFx(new THREE.Vector3(n.g.x, Math.max(0.3, n.g.y), n.g.z), GRENADE.radius);
+      if (n.mine) this.#grenadeBlast(n.g);
+    }
+  }
+
+  /** Solo quien la lanza calcula el daño. Las paredes protegen. En zombis no daña a los compañeros. */
+  #grenadeBlast(g) {
+    const zombies = this.mode === 'zombies';
+    const reach = (x, z) => (hasLOS(this.map, g.x, g.z, x, z) ? grenadeDamage(Math.hypot(x - g.x, z - g.z)) : 0);
+    let hitAny = false;
+    for (const a of this.avatars.values()) {
+      if (!a.group.visible || a.dead || a.inv) continue;
+      const dmg = reach(a.x, a.z);
+      if (!dmg) continue;
+      if (a.kind !== 'player') { this.onEntityHit(a.id, dmg, 'grenade'); hitAny = true; }
+      else if (!zombies) { this.net?.hit({ r: this.seed, dmg, w: 'grenade' }, a.id); hitAny = true; }
+    }
+    for (const b of this.barrelMeshes ?? []) {
+      if (!this.deadBarrels.has(b.id) && reach(b.x, b.z)) this.onEntityHit(b.id, 50, 'grenade');
+    }
+    if (hitAny) { sfx.hit(); this.hud.hitmarker(false); }
+    const self = reach(this.pos.x, this.pos.z);
+    if (self) this.takeDamage(Math.round(self * (zombies ? 0.25 : 0.6)), this.selfId, 'grenade');
   }
 
   // ---------- Mejoras de la tienda (zombis) ----------
@@ -638,6 +730,14 @@ export class Game {
 
   explode({ x, y, z, by }) {
     const pos = new THREE.Vector3(x, y, z);
+    this.#blastFx(pos, BARREL_RADIUS);
+    // daño a mí
+    const me = new THREE.Vector3(this.pos.x, this.feetY + 1, this.pos.z);
+    const dist = me.distanceTo(pos);
+    if (dist < BARREL_RADIUS) this.takeDamage(Math.round(BARREL_DMG * (1 - dist / BARREL_RADIUS) + 10), by, 'barrel');
+  }
+
+  #blastFx(pos, radius) {
     // efecto: esfera que crece y se desvanece + luz ya existente no (evitar recompilar shaders)
     const mesh = new THREE.Mesh(
       new THREE.SphereGeometry(1, 16, 12),
@@ -645,14 +745,10 @@ export class Game {
     );
     mesh.position.copy(pos);
     this.scene.add(mesh);
-    this.effects.push({ mesh, t: 0, dur: 0.5, grow: BARREL_RADIUS });
+    this.effects.push({ mesh, t: 0, dur: 0.5, grow: radius });
     const d = pos.distanceTo(this.camera.position);
     sfx.explosion(Math.max(0.15, 1 - d / 50));
     if (d < 12) this.shake = Math.max(this.shake ?? 0, (12 - d) / 12);
-    // daño a mí
-    const me = new THREE.Vector3(this.pos.x, this.feetY + 1, this.pos.z);
-    const dist = me.distanceTo(pos);
-    if (dist < BARREL_RADIUS) this.takeDamage(Math.round(BARREL_DMG * (1 - dist / BARREL_RADIUS) + 10), by, 'barrel');
   }
 
   // ---------- Power-ups ----------
@@ -698,8 +794,9 @@ export class Game {
     const parkour = map.kind === 'parkour';
     const zombies = map.kind === 'zombies';
 
-    this.scene.fog.near = parkour ? 25 : open ? 18 : zombies ? 4 : 3;
-    this.scene.fog.far = parkour ? 110 : open ? 75 : zombies ? 30 : 26;
+    const indoorParkour = parkour && map.ceiling;
+    this.scene.fog.near = indoorParkour ? 14 : parkour ? 25 : open ? 18 : zombies ? 4 : 3;
+    this.scene.fog.far = indoorParkour ? 60 : parkour ? 110 : open ? 75 : zombies ? 30 : 26;
     this.baseBg = parkour ? 0x1a0610 : open ? 0x0a0518 : 0x06030c;
     this.scene.background.set(this.baseBg);
     this.scene.fog.color.copy(this.scene.background);
@@ -781,6 +878,12 @@ export class Game {
       lava.rotation.x = -Math.PI / 2;
       lava.position.set(cx, -0.6, cz);
       world.add(lava);
+      if (map.ceiling) {
+        const roof = new THREE.Mesh(new THREE.PlaneGeometry(W * TILE, H * TILE), new THREE.MeshStandardMaterial({ color: 0x1a1020 }));
+        roof.rotation.x = Math.PI / 2;
+        roof.position.set(cx, wallH, cz);
+        world.add(roof);
+      }
     } else {
       const floorTex = canvasTexture(32, (g, s) => {
         g.fillStyle = '#120d1c'; g.fillRect(0, 0, s, s);
@@ -1029,6 +1132,9 @@ export class Game {
       } else if (p.kind === 'ammo') {
         add(new THREE.BoxGeometry(1.5, 0.9, 1), new THREE.MeshStandardMaterial({ color: 0x35602a, roughness: 0.8 }), 0, 0.45, 0, g);
         add(new THREE.PlaneGeometry(1.3, 0.7), new THREE.MeshBasicMaterial({ map: signTexture(['MUNICIÓN', '1000 pts'], '#141018', '#6fd13a') }), 0, 0.5, 0.51, g);
+      } else if (p.kind === 'grenades') {
+        add(new THREE.BoxGeometry(1.5, 0.9, 1), new THREE.MeshStandardMaterial({ color: 0x5a4a2a, roughness: 0.8 }), 0, 0.45, 0, g);
+        add(new THREE.PlaneGeometry(1.3, 0.7), new THREE.MeshBasicMaterial({ map: signTexture(['GRANADAS', '500 pts'], '#141018', '#ff8a1f') }), 0, 0.5, 0.51, g);
       } else if (p.kind === 'box') {
         const mat = new THREE.MeshStandardMaterial({ color: 0x2040a0, emissive: 0x3060ff, emissiveIntensity: 0.5, roughness: 0.5 });
         add(new THREE.BoxGeometry(2, 1, 1.1), mat, 0, 0.5, 0, g);
@@ -1160,6 +1266,9 @@ export class Game {
     for (const w of map.windows) check({ ...w, kind: 'window' });
     for (const b of map.wallBuys) check({ ...b, kind: 'wall' });
     for (const p of map.props) check(p);
+    for (const a of this.avatars.values()) {
+      if (a.kind === 'player' && a.dead && !a.rv && a.r === this.seed) check({ kind: 'ally', id: a.id, name: a.name, x: a.x / TILE, y: a.z / TILE });
+    }
     return best;
   }
 
@@ -1168,14 +1277,19 @@ export class Game {
     this.useTarget = t;
     if (!t) { this.hud.prompt(null); return; }
     const { text, cost, ok, reason } = t.info;
-    this.hud.prompt({ text: `E · ${text}` + (cost ? ` · ${cost} pts` : ''), reason: ok ? null : reason });
+    const progress = t.kind === 'ally' && this.reviveMs > 0 ? ` · ${Math.round((this.reviveMs / REVIVE_MS) * 100)} %` : '';
+    this.hud.prompt({ text: `E · ${text}` + (cost ? ` · ${cost} pts` : '') + progress, reason: ok ? null : reason });
   }
 
   /** Pulsar E (o mantenerlo en una ventana). */
   #use() {
     const t = this.#findUseTarget();
-    if (!t) return;
+    if (!t || t.kind === 'ally') return; // revivir es manteniendo pulsado (ver #update)
     if (!t.info.ok) { this.hud.toast(t.info.reason, '#ff3d5a'); return; }
+    if (t.kind === 'grenades' && this.nades >= GRENADE.max) {
+      this.hud.toast('Granadas al máximo', '#ffd23d');
+      return;
+    }
     if (t.kind === 'wall' && this.owned.includes(t.weapon) && this.ammoFull(t.weapon)) {
       this.hud.toast('Munición llena', '#ffd23d');
       return;
@@ -1213,7 +1327,7 @@ export class Game {
       const tz = this.map.kind === 'training' ? 0 : c;
       this.yaw = Math.atan2(-(c - this.pos.x), -(tz - this.pos.z));
     } else if (this.map.kind === 'parkour') {
-      this.yaw = 0; // la meta está "arriba" (-z)
+      this.yaw = this.map.startYaw ?? 0; // por defecto la meta está "arriba" (-z)
     } else {
       const dirs = [[0, -1, 0], [1, 0, -Math.PI / 2], [0, 1, Math.PI], [-1, 0, Math.PI / 2]];
       const open = dirs.find(([dx, dy]) => this.map.height(tile.x + dx, tile.y + dy) === 0);
@@ -1251,11 +1365,13 @@ export class Game {
     this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     document.addEventListener('pointerlockchange', () => {
       const locked = document.pointerLockElement === this.canvas;
+      this.mouseFilter.reset();
       this.hud.paused(this.active && !locked);
       if (!locked) { this.keys.clear(); this.mouseHeld = false; this.setZoom(false); }
     });
     document.addEventListener('mousemove', (e) => {
       if (document.pointerLockElement !== this.canvas) return;
+      if (!this.mouseFilter.accept(e.movementX, e.movementY)) return;
       const zoomK = this.zoomed ? WEAPONS[this.currentWeapon].zoom / settings.fov : 1;
       const k = 0.0022 * settings.sens * zoomK;
       this.yaw -= e.movementX * k;
@@ -1289,6 +1405,7 @@ export class Game {
       this.keys.add(e.code);
       if (e.code === 'KeyV' && !e.repeat) this.#melee();
       if (e.code === 'KeyE' && !e.repeat && this.active) this.#use();
+      if (e.code === 'KeyG' && !e.repeat && this.active) this.#throwGrenade();
       if (e.code === 'KeyR' && this.active && !e.repeat) {
         if (this.ended) this.onRematch();
         else this.reload();
@@ -1317,6 +1434,7 @@ export class Game {
     const dt = Math.min((t - this.lastT) / 1000, 0.05);
     this.lastT = t;
     if (this.active && this.map) this.#update(dt, t);
+    if (this.active && this.map) this.#updateGrenades(dt);
     this.#updateBeams(dt);
     this.#updateEffects(dt);
     if (this.portal) this.portal.rotation.y += dt;
@@ -1493,6 +1611,15 @@ export class Game {
     if (this.z) {
       this.#updateBox(dt, now);
       if (this.keys.has('KeyE') && this.useTarget?.kind === 'window' && now >= this.repairAt) this.#use();
+      // Revivir: mantener E junto a un compañero caído
+      if (this.keys.has('KeyE') && this.useTarget?.kind === 'ally' && this.alive) {
+        this.reviveMs += dt * 1000;
+        if (this.reviveMs >= REVIVE_MS) {
+          this.reviveMs = 0;
+          this.onUse({ kind: 'ally', id: this.useTarget.id });
+          this.useTarget = null;
+        }
+      } else this.reviveMs = 0;
       if (this.bossLight && this.bossId) {
         const boss = this.avatars.get(this.bossId);
         if (boss) { this.bossLight.position.set(boss.x, 2.5, boss.z); this.bossLight.intensity = 40; }
@@ -1553,8 +1680,16 @@ export class Game {
       a.group.visible = true;
       a.group.position.set(a.x, a.y + (a.kind === 'zombie' ? Math.abs(Math.sin(now / 150 + a.x)) * 0.08 : 0), a.z);
       a.body.rotation.y = a.yaw;
-      a.body.visible = !a.dead;
-      a.label.visible = !a.dead && !a.ghost;
+      // Zombis: un compañero caído se queda tumbado y pide ayuda
+      const downed = a.dead && a.kind === 'player' && this.mode === 'zombies';
+      if (downed !== !!a.downed) {
+        a.downed = downed;
+        a.body.rotation.x = downed ? Math.PI / 2 : 0;
+        a.body.position.y = downed ? 0.4 : 0;
+        this.#setLabel(a, downed ? '¡REVÍVEME!' : a.name || '???', downed ? 0xff3d5a : a.color);
+      }
+      a.body.visible = !a.dead || downed;
+      a.label.visible = (!a.dead || downed) && !a.ghost;
       if (a.hpBg) { a.hpBg.visible = !a.dead; a.hpFg.visible = !a.dead; }
       if (a.light) a.light.intensity = a.dead || a.ghost ? 0 : 5; // nunca quitar luces: recompila shaders
       a.mat.opacity = a.ghost ? 0.12 : a.inv ? 0.35 + 0.25 * Math.sin(now / 60) : 1;
@@ -1565,6 +1700,7 @@ export class Game {
     if (this.puHudTimer > 0.1) {
       this.puHudTimer = 0;
       if (this.z) this.#updatePrompt();
+      this.#updateMinimap(now);
       this.hud.powerups(Object.entries(this.activePu).map(([type, until]) => ({
         type, left: (until - now) / 1000, frac: (until - now) / (POWERUPS[type].duration * 1000),
       })));
@@ -1573,6 +1709,17 @@ export class Game {
     // Red
     this.netTimer += dt;
     if (this.netTimer >= NET_INTERVAL) { this.netTimer = 0; this.#sendState(); }
+  }
+
+  #updateMinimap(now) {
+    if (!this.minimap?.active) return;
+    const allies = [], foes = [];
+    for (const a of this.avatars.values()) {
+      if (!a.group.visible) continue;
+      if (a.kind === 'zombie' && !a.dead) foes.push(a);
+      else if (a.kind === 'player' && this.mode === 'zombies') allies.push(a);
+    }
+    this.minimap.render({ me: { x: this.pos.x, z: this.pos.z, yaw: this.yaw }, allies, foes, zw: this.zw, now });
   }
 
   #localPowerups(now) {
