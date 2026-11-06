@@ -57,12 +57,14 @@ test('zombis en equipo: puntos, puertas, electricidad, armas y revivir', async (
   await expect.poll(() => game(s.guest, () => window.__game.zw.power)).toBe(true);
   // el invitado compra un arma: la paga en el host y le llega a él
   await givePoints(s.host, 1000, s.ids.guest);
+  await expect(s.guest.locator('#points')).toContainText('1000 pts');
   await standNextTo(s.guest, 'wall', { weapon: 'smg' });
   await s.guest.keyboard.press('KeyE');
   await expect.poll(() => game(s.guest, () => window.__game.currentWeapon)).toBe('smg');
   expect(await game(s.host, (id) => window.__roster()[id].weapons, s.ids.guest)).toEqual(['pistol', 'smg']);
   // ...y su máquina: la mejora le llega a él
   await givePoints(s.host, 2000, s.ids.guest);
+  await expect(s.guest.locator('#points')).toContainText('2000 pts');
   await standNextTo(s.guest, 'machine', { item: 'doubletap' });
   await s.guest.keyboard.press('KeyE');
   await expect.poll(() => game(s.guest, () => window.__game.perks.has('doubletap'))).toBe(true);
@@ -84,6 +86,73 @@ test('zombis en equipo: el invitado ve la vida de los zombis y las tablas', asyn
   await s.guest.waitForFunction(() => [...window.__game.avatars.values()].some((a) => a.kind === 'zombie' && a.maxHp > 0), null, { timeout: 30_000 });
   // los zombis rompen tablas de una ventana y el invitado lo ve
   await s.guest.waitForFunction(() => Object.values(window.__game.zw.planks).some((n) => n < 5), null, { timeout: 20_000 });
+  expectNoErrors(s.host, s.guest);
+  await s.close();
+});
+
+test('zombis en equipo: revivir a un compañero manteniendo E, en el sitio donde cayó', async ({ browser }) => {
+  const s = await hostAndJoin(browser, 'zombies');
+  await game(s.guest, () => { const g = window.__game; g.pos = { x: 15 * 3, z: 22 * 3 }; });
+  await s.guest.waitForTimeout(300);
+  await game(s.guest, () => window.__game.takeDamage(999, 'z-0', 'zombie'));
+  await s.guest.waitForFunction(() => window.__game.dead);
+  await expect(s.guest.locator('#dead')).toBeVisible();
+  // el host lo ve tumbado, pidiendo ayuda
+  await s.host.waitForFunction((id) => { const a = window.__game.avatars.get(id); return a.dead && a.downed && a.body.visible; }, s.ids.guest);
+  await game(s.host, () => { const g = window.__game; g.pos = { x: 16 * 3, z: 22 * 3 }; });
+  await expect(s.host.locator('#prompt')).toContainText('revivir');
+  const pts = await game(s.host, () => window.__roster()[window.__selfId].points);
+  // pulsar un momento no basta
+  await s.host.keyboard.press('KeyE');
+  await s.host.waitForTimeout(500);
+  expect(await game(s.guest, () => window.__game.dead)).toBe(true);
+  await s.host.keyboard.down('KeyE');
+  await s.guest.waitForFunction(() => !window.__game.dead, null, { timeout: 12_000 });
+  await s.host.keyboard.up('KeyE');
+  expect(await game(s.guest, () => window.__game.pos.x)).toBe(15 * 3);
+  await expect.poll(() => game(s.host, () => window.__roster()[window.__selfId].points)).toBeGreaterThanOrEqual(pts + 100);
+  await s.host.waitForFunction((id) => !window.__game.avatars.get(id).downed, s.ids.guest);
+  expectNoErrors(s.host, s.guest);
+  await s.close();
+});
+
+test('cambiar de modo al acabar, sin salir de la sala ni reenviar el enlace', async ({ browser }) => {
+  const s = await hostAndJoin(browser, 'maze', { '#sel-diff': 'facil' });
+  await game(s.guest, () => { const g = window.__game; g.pos = { x: g.map.exit.x * 3, z: g.map.exit.y * 3 }; });
+  await expect(s.host.locator('#msg-sub')).toContainText('M cambiar de modo');
+  // el invitado no puede abrirlo
+  await s.guest.keyboard.press('KeyM');
+  await expect(s.guest.locator('#lobby')).toBeHidden();
+  await s.host.keyboard.press('KeyM');
+  await expect(s.host.locator('#btn-room-start')).toBeVisible();
+  await expect(s.host.locator('#btn-create')).toBeHidden();
+  await expect(s.host.locator('label:has(input[value=training])')).toBeHidden(); // no se juega en red
+  // volver sin cambiar nada
+  await s.host.click('#btn-room-back');
+  await expect(s.host.locator('#overlay')).toBeHidden();
+  await s.host.keyboard.press('KeyM');
+  await s.host.click('label:has(input[value=zombies])');
+  await s.host.click('#btn-room-start');
+  await s.host.waitForFunction(() => window.__game.mode === 'zombies' && !window.__game.ended);
+  await s.guest.waitForFunction(() => window.__game.mode === 'zombies' && !window.__game.ended);
+  await expect(s.host.locator('#overlay')).toBeHidden();
+  await expect(s.guest.locator('#overlay')).toBeHidden();
+  await s.guest.waitForFunction((id) => window.__game.avatars.get(id)?.group.visible, s.ids.host, { timeout: 15_000 });
+  expectNoErrors(s.host, s.guest);
+  await s.close();
+});
+
+test('granada en red: la ven los dos y daña al otro en arena', async ({ browser }) => {
+  const s = await hostAndJoin(browser, 'arena', { '#sel-map': 'coliseo', '#sel-goal': '5' });
+  await s.guest.waitForFunction((id) => window.__game.avatars.get(id)?.group.visible, s.ids.host);
+  // el invitado, justo delante del host
+  await game(s.guest, () => { const g = window.__game; g.invulnUntil = 0; g.pos = { x: 21, z: 9 }; });
+  await game(s.host, () => { const g = window.__game; g.invulnUntil = 0; g.pos = { x: 21, z: 3 * 3 + 6 }; g.yaw = 0; g.pitch = -0.3; });
+  await s.host.waitForFunction((id) => { const a = window.__game.avatars.get(id); return Math.abs(a.z - 9) < 0.5 && !a.inv; }, s.ids.guest, { timeout: 10_000 });
+  await s.host.keyboard.press('KeyG');
+  await s.guest.waitForFunction(() => window.__game.grenades.length === 1, null, { timeout: 5000 });
+  await s.guest.waitForFunction(() => window.__game.hp < 100 || window.__game.dead, null, { timeout: 8000 });
+  expect(await game(s.host, () => window.__game.nades)).toBe(1);
   expectNoErrors(s.host, s.guest);
   await s.close();
 });

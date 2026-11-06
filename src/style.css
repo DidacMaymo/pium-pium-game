@@ -88,8 +88,15 @@ input.name { margin-bottom: 10px; text-align: center; }
 
 /* Puntos y mejoras de zombis */
 #points { position: absolute; left: 16px; bottom: 62px; font-weight: bold; color: #ffd23d; text-shadow: 0 0 6px #000; }
-#perks { position: absolute; left: 16px; bottom: 88px; display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+#perks { position: absolute; left: 16px; bottom: 112px; display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
 #perks span { color: #6fd13a; text-shadow: 0 0 6px #000; }
+
+#grenades { position: absolute; left: 16px; bottom: 88px; font-weight: bold; font-size: 14px; color: #ff8a1f; text-shadow: 0 0 6px #000; }
+.auto-w { width: auto; }
+
+/* Minimapa */
+#minimap { position: absolute; top: 12px; right: 12px; opacity: .9; border: 2px solid #6a5aa8; border-radius: 4px; image-rendering: pixelated; }
+#minimap:not([hidden]) ~ #feed { right: 225px; }
 
 /* Munición */
 #ammo { position: absolute; right: 16px; bottom: 30px; font-size: 30px; font-weight: bold; text-shadow: 0 0 6px #000; font-variant-numeric: tabular-nums; }

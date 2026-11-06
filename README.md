@@ -10,6 +10,7 @@ Shooter láser en primera persona, de 1 a 8 jugadores (y bots). Cada ronda gener
   Gana quien consiga una baja con la última.
 - **Zombis**: cooperativo por oleadas en un búnker enorme de 9 salas. Empiezas con pistola; todo lo demás se paga con puntos. Perdéis si caéis todos a la vez.
 - **Parkour**: carrera sobre lava con checkpoints y cronómetro. Solo contra el reloj (se guarda tu récord) o contra amigos.
+  7 niveles: los 4 últimos, de dificultad media-difícil, son dentro de edificios (Almacén, Torre de oficinas, Hospital y Sótano).
 - **Entrenamiento**: 5 blancos (fijos, móviles y lejanos) para practicar con cada arma; mide precisión y tiempo por serie.
 
 **Bots** (Laberinto, Arena, Juego de armas): de 1 a 7, en Fácil, Normal o Difícil. Se puede jugar solo contra bots.
@@ -32,6 +33,8 @@ y barriles explosivos (con reacción en cadena).
 - **Ventanas y puertas de servicio**: por ahí entran los zombis, tras romper las tablas. Mantén **E** para repararlas.
 - **Carpintero** (500, en la sala inicial): repara todas las ventanas del mapa.
 - **Munición** (1000, en el patio central): rellena todas tus armas.
+- **Granadas** (500 por 2, en la sala inicial): empiezas con 2 y llevas 4 como máximo.
+- **Revivir a un compañero**: un caído se queda tumbado donde cayó. Mantén **E** a su lado 2,5 s para levantarlo, gratis y con 100 puntos de premio.
 - **Electricidad** (gratis, en la sala del noroeste): hay que llegar hasta ella. Sin luz no funciona ninguna máquina.
 - **Máquinas** (mejoras fijas hasta que caes): Botiquín, Revivir equipo, Segunda Vida, Puño de Hierro (el puñetazo con **V** revienta zombis),
   Refresco Blindado (200 de vida), Cola Doble Tiro, Recarga Exprés y Pack-a-Pium (doble daño).
@@ -39,6 +42,11 @@ y barriles explosivos (con reacción en cadena).
 - **Zombi rojo**: cada 7 oleadas llega uno mucho más grande y resistente que muerde fuerte. Matarlo da 1000 puntos extra y munición llena a todo el equipo.
 
 Cada zombi lleva su vida encima, en barra y en número. No hay plataformas: los zombis pueden llegar a cualquier sitio.
+
+**Granadas (G)** en Arena y Zombis: rebotan y explotan a los 1,8 s. Las paredes protegen, y en zombis no dañan a los compañeros.
+
+**Minimapa**: en Zombis se va descubriendo lo que ves, con compañeros y zombis a la vista. En Arena y Juego de armas se ve todo el mapa,
+y los rivales solo aparecen como un punto rojo cuando disparan.
 
 **Puñetazo (V)** en todos los modos con armas. En el Juego de armas, un puñetazo *humilla*: la víctima baja de nivel.
 
@@ -57,7 +65,8 @@ Cada zombi lleva su vida encima, en barra y en número. No hay plataformas: los 
    o escriben el código en el menú principal. Se puede entrar a mitad de partida.
 3. El host pulsa **¡Empezar!**.
 4. Clic en la pantalla para capturar el ratón. WASD moverse, Espacio saltar, clic disparar, clic derecho apuntar, R recargar,
-   E usar (zombis), 1-6 o la rueda para cambiar de arma, Esc pausa. Al acabar, R otra ronda. En Entrenamiento, T reinicia.
+   E usar (zombis), G granada, 1-6 o la rueda para cambiar de arma, Esc pausa. Al acabar, R otra ronda; el host puede pulsar M para
+   cambiar de modo sin salir de la sala. En Entrenamiento, T reinicia.
 
 ## Desarrollo
 
@@ -98,6 +107,9 @@ npm run test:e2e
 | `src/shop.js` | Máquinas zombi: mejoras, precios y reglas de compra |
 | `src/zombieworld.js` | Mundo zombi: puertas, ventanas, caja, armas de pared, oleadas y zombi rojo (lógica pura) |
 | `src/util.js` | Códigos de sala, formato de tiempos |
+| `src/input.js` | Filtro del ratón: descarta los saltos falsos que hacían girar la cámara sola |
+| `src/grenades.js` | Física y daño de las granadas |
+| `src/minimap.js` | Minimapa: descubrimiento en zombis y disparos en rojo |
 | `src/parkourCheck.js` | Comprueba con la física del juego que un nivel de parkour se puede superar |
 | `tests/unit/` | Tests unitarios (Vitest) |
 | `tests/e2e/` | Tests en navegador (Playwright) |

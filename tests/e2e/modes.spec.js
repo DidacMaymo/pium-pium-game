@@ -199,7 +199,7 @@ test('zombis: entran por las ventanas; se reparan a mano o con el carpintero', a
 
 test('zombis: en la oleada 7 llega el zombi rojo, y matarlo recarga la munición', async ({ context }) => {
   const page = await startZombies(context);
-  await game(page, () => window.__startWave(7));
+  await game(page, () => { window.__game.invulnUntil = performance.now() + 1e7; window.__startWave(7); });
   await page.waitForFunction(() => [...window.__game.avatars.values()].some((a) => a.boss), null, { timeout: 10_000 });
   await expect(page.locator('#boss')).toBeVisible();
   await expect(page.locator('#wave')).toContainText('ZOMBI ROJO');
@@ -251,6 +251,113 @@ for (const [mode, weapon] of [['arena', 'pistol'], ['maze', 'laser'], ['gungame'
     expectNoErrors(page);
   });
 }
+
+test('granadas: se lanzan con G, explotan, dañan y en zombis se compran', async ({ context }) => {
+  const page = await startZombies(context);
+  await expect(page.locator('#grenades')).toContainText('2 granadas');
+  // un zombi justo al lado de donde caerá la granada
+  await page.waitForFunction(() => [...window.__game.avatars.values()].some((a) => a.kind === 'zombie' && a.group.visible), null, { timeout: 30_000 });
+  const before = await game(page, () => {
+    const g = window.__game;
+    const z = [...g.avatars.values()].find((a) => a.kind === 'zombie');
+    const w = window.__bots.bots.get(z.id).win;
+    window.__bots.bots.get(z.id).win = null;
+    window.__bots.bots.get(z.id).x = w.in.x * 3;
+    window.__bots.bots.get(z.id).z = w.in.y * 3;
+    window.__bots.bots.get(z.id).speed = 0;
+    g.pos = { x: w.in.x * 3, z: (w.in.y - 3) * 3 };
+    g.yaw = Math.PI;
+    g.pitch = -0.2;
+    return { id: z.id, hp: z.hp };
+  });
+  await page.keyboard.press('KeyG');
+  await expect(page.locator('#grenades')).toContainText('1 granadas');
+  await expect.poll(() => game(page, (id) => window.__game.avatars.get(id)?.hp ?? 0, before.id), { timeout: 8000 }).toBeLessThan(before.hp);
+  // comprar más (empiezas con 500)
+  await standNextTo(page, 'grenades');
+  await expect(page.locator('#prompt')).toContainText('granadas');
+  await givePoints(page, 500);
+  await page.keyboard.press('KeyE');
+  await expect(page.locator('#grenades')).toContainText('3 granadas');
+  expectNoErrors(page);
+});
+
+test('minimapa en zombis: se descubre al andar', async ({ context }) => {
+  const page = await startZombies(context);
+  await expect(page.locator('#minimap')).toBeVisible();
+  await page.waitForFunction(() => window.__game.minimap.seen.size > 0);
+  const known = await game(page, () => window.__game.minimap.seen.size);
+  const power = await game(page, () => { const m = window.__game.map; const p = m.props.find((x) => x.kind === 'power'); return p.y * m.W + p.x; });
+  expect(await game(page, (i) => window.__game.minimap.seen.has(i), power)).toBe(false);
+  await standNextTo(page, 'power');
+  await page.waitForFunction((i) => window.__game.minimap.seen.has(i), power);
+  expect(await game(page, () => window.__game.minimap.seen.size)).toBeGreaterThan(known);
+  expectNoErrors(page);
+});
+
+test('minimapa en arena: marca en rojo donde disparan; no sale en parkour', async ({ context }) => {
+  const page = await openGame(context);
+  await chooseMode(page, 'arena', { '#sel-bots': '3', '#sel-skill': 'dificil' });
+  await page.click('#btn-solo');
+  await waitPlaying(page);
+  await expect(page.locator('#minimap')).toBeVisible();
+  await page.waitForFunction(() => window.__game.minimap.shots.length > 0, null, { timeout: 45_000 });
+  await game(page, () => document.getElementById('btn-quit').click());
+  await chooseMode(page, 'parkour');
+  await page.click('#btn-solo');
+  await waitPlaying(page);
+  await expect(page.locator('#minimap')).toBeHidden();
+  expectNoErrors(page);
+});
+
+for (const level of [3, 4, 5, 6]) {
+  test(`parkour dentro de edificio (nivel ${level + 1}): arranca, tiene techo y la lava devuelve al inicio`, async ({ context }) => {
+    const page = await openGame(context);
+    await chooseMode(page, 'parkour', { '#sel-level': String(level) });
+    await page.click('#btn-solo');
+    await waitPlaying(page);
+    expect(await game(page, () => window.__game.map.ceiling)).toBe(true);
+    const start = await game(page, () => ({ ...window.__game.pos }));
+    await game(page, () => { const g = window.__game; const m = g.map; g.pos = { x: (m.start.x + 1) * 3, z: m.start.y * 3 }; g.feetY = 0.2; });
+    await expect.poll(() => game(page, () => window.__game.pos.x)).toBe(start.x);
+    await game(page, () => { const g = window.__game; const f = g.map.finish; g.pos = { x: f.x * 3, z: f.y * 3 }; g.feetY = g.map.height(f.x, f.y) + 0.3; });
+    await expect(page.locator('#msg-main')).toContainText(/RÉCORD|Meta/);
+    expectNoErrors(page);
+  });
+}
+
+test('unirse con código: el campo está siempre, también con Entrenamiento seleccionado', async ({ context }) => {
+  const page = await openGame(context);
+  await chooseMode(page, 'training');
+  await expect(page.locator('#input-code')).toBeVisible();
+  await page.locator('#input-code').click();
+  await page.keyboard.type('ab2cd');
+  await expect(page.locator('#input-code')).toHaveValue('ab2cd');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#wait-title')).toContainText('AB2CD');
+  expectNoErrors(page);
+});
+
+test('unirse con enlace: también se puede escribir el nombre', async ({ context }) => {
+  const page = await openGame(context, '/#ab12c');
+  await page.locator('#input-name-join').click();
+  await page.keyboard.type('Pepa');
+  await expect(page.locator('#input-name-join')).toHaveValue('Pepa');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#wait-title')).toContainText('AB12C');
+  expectNoErrors(page);
+});
+
+test('unirse con código: desde un enlace antiguo se puede escribir otro', async ({ context }) => {
+  const page = await openGame(context, '/#viejo');
+  await expect(page.locator('#join-only')).toBeVisible();
+  await page.locator('#input-code-other').click();
+  await page.keyboard.type('nuevo');
+  await page.click('#btn-join-other');
+  await expect(page.locator('#wait-title')).toContainText('NUEVO');
+  expect(page.url()).toContain('#NUEVO');
+  expectNoErrors(page);
+});
 
 test('munición: al vaciar el cargador recarga solo', async ({ context }) => {
   const page = await openGame(context);

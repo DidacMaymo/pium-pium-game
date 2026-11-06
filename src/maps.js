@@ -280,8 +280,8 @@ export function buildZombies(seed) {
       } else if (weapons[ch]) {
         h[i] = WALL;
         map.wallBuys.push({ id: `arma-${map.wallBuys.length}`, x, y, weapon: weapons[ch] });
-      } else if (ch === 'P' || ch === 'M' || ch === 'A' || ch === 'C' || machines[ch]) {
-        const kind = { P: 'power', M: 'box', A: 'ammo', C: 'carpenter' }[ch] ?? 'machine';
+      } else if ('PMACG'.includes(ch) || machines[ch]) {
+        const kind = { P: 'power', M: 'box', A: 'ammo', C: 'carpenter', G: 'grenades' }[ch] ?? 'machine';
         map.props.push({ kind, id: `${kind}-${map.props.length}`, x, y, item: machines[ch] });
         map.navBlocked.add(i);
       } else if (ch !== '.') throw new Error(`Carácter desconocido '${ch}' en (${x},${y})`);
@@ -341,6 +341,7 @@ export function applyDoors(map, openIds) {
 
 function parkourLegend(ch) {
   if (ch === ' ') return LAVA;
+  if (ch === '#') return WALL; // niveles dentro de edificios
   if (ch >= '1' && ch <= '9') return Number(ch) * 0.5;
   if (ch >= 'a' && ch <= 'i') return (ch.charCodeAt(0) - 96) * 0.5; // checkpoint
   if ('SFJZEMN'.includes(ch)) return 0; // se corrige con la definición del nivel
@@ -351,7 +352,7 @@ export function buildParkour(levelIdx, seed) {
   const def = PARKOUR_LEVELS[levelIdx] ?? PARKOUR_LEVELS[0];
   const { W, H, h, tags } = parseRows(def.rows, parkourLegend);
   const map = {
-    kind: 'parkour', seed, W, H, h, exit: null, wallH: 12, ceiling: false, name: def.name,
+    kind: 'parkour', seed, W, H, h, exit: null, wallH: def.wallH ?? 12, ceiling: !!def.wallH, name: def.name, startYaw: def.startYaw ?? 0,
     base: LAVA, lava: true, movers: [], barrels: [], checkpoints: [], localPowerups: [], spawns: [],
   };
   let npu = 0;
