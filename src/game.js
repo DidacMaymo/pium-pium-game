@@ -384,6 +384,7 @@ export class Game {
     this.hud.boss(null);
     this.hud.prompt(null);
     this.reviveMs = 0;
+    this.reviveStart = 0;
     this.#clearGrenades();
     this.nades = this.rules.grenades ?? 0;
     this.hud.grenades(this.rules.grenades ? this.nades : null);
@@ -1431,10 +1432,12 @@ export class Game {
 
   #frame() {
     const t = performance.now();
-    const dt = Math.min((t - this.lastT) / 1000, 0.05);
+    const elapsed = (t - this.lastT) / 1000;
+    const dt = Math.min(elapsed, 0.05);
     this.lastT = t;
     if (this.active && this.map) this.#update(dt, t);
-    if (this.active && this.map) this.#updateGrenades(dt);
+    // En tiempo real: con pocos fps dt va limitado y la espoleta duraría mucho más
+    if (this.active && this.map) this.#updateGrenades(Math.min(elapsed, 0.25));
     this.#updateBeams(dt);
     this.#updateEffects(dt);
     if (this.portal) this.portal.rotation.y += dt;
@@ -1613,13 +1616,15 @@ export class Game {
       if (this.keys.has('KeyE') && this.useTarget?.kind === 'window' && now >= this.repairAt) this.#use();
       // Revivir: mantener E junto a un compañero caído
       if (this.keys.has('KeyE') && this.useTarget?.kind === 'ally' && this.alive) {
-        this.reviveMs += dt * 1000;
+        this.reviveStart ||= now; // en tiempo real: no debe tardar más con pocos fps
+        this.reviveMs = now - this.reviveStart;
         if (this.reviveMs >= REVIVE_MS) {
+          this.reviveStart = 0;
           this.reviveMs = 0;
           this.onUse({ kind: 'ally', id: this.useTarget.id });
           this.useTarget = null;
         }
-      } else this.reviveMs = 0;
+      } else { this.reviveStart = 0; this.reviveMs = 0; }
       if (this.bossLight && this.bossId) {
         const boss = this.avatars.get(this.bossId);
         if (boss) { this.bossLight.position.set(boss.x, 2.5, boss.z); this.bossLight.intensity = 40; }
