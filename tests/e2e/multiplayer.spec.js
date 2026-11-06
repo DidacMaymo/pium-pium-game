@@ -99,7 +99,8 @@ test('zombis en equipo: revivir a un compañero manteniendo E, en el sitio donde
   await expect(s.guest.locator('#dead')).toBeVisible();
   // el host lo ve tumbado, pidiendo ayuda
   await s.host.waitForFunction((id) => { const a = window.__game.avatars.get(id); return a.dead && a.downed && a.body.visible; }, s.ids.guest);
-  await game(s.host, () => { const g = window.__game; g.pos = { x: 16 * 3, z: 22 * 3 }; });
+  // el host no debe caer mientras revive: si no, la partida acaba
+  await game(s.host, () => { const g = window.__game; g.invulnUntil = performance.now() + 1e7; g.pos = { x: 16 * 3, z: 22 * 3 }; });
   await expect(s.host.locator('#prompt')).toContainText('revivir');
   const pts = await game(s.host, () => window.__roster()[window.__selfId].points);
   // pulsar un momento no basta
